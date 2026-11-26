@@ -82,12 +82,12 @@ function Preferences({value,hideQuick,scope,category,quick,onSave,onReset,onDele
       <label><input type="checkbox" checked={draft.lowOil} onChange={e=>update("lowOil",e.target.checked)}/>优先少油</label>
       <label><input type="checkbox" checked={draft.noFry} onChange={e=>update("noFry",e.target.checked)}/>优先非油炸</label>
     </div></>}
+    {scope==="global"&&<>
       <div className="avoid-head"><strong>忌口</strong><input aria-label="搜索食材" placeholder="搜索食材" value={ingredient} onChange={e=>setIngredient(e.target.value)}/></div>
       <div className="ingredient-list">{foods.filter(x=>x.includes(ingredient)).map(food=><button className={draft.avoid.includes(food)?"chosen":""} type="button" key={food} aria-pressed={draft.avoid.includes(food)}
         onClick={()=>update("avoid",draft.avoid.includes(food)?draft.avoid.filter(x=>x!==food):[...draft.avoid,food])}>{food}</button>)}
         {!foods.some(x=>x.includes(ingredient))&&<p className="muted">没有匹配的食材。</p>}
       </div>
-    {scope==="global"&&<>
       <div className="quick-prefs">
         <label><input type="checkbox" checked={!hidden} onChange={e=>setHidden(!e.target.checked)}/> 显示快捷输入</label>
         <button type="button" className="text-btn" disabled={busy||!quick.length} onClick={()=>onDelete()}>清空记录</button>
@@ -507,10 +507,10 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
       {(panel==="profile"||panel==="today")&&<>
         {panel==="profile"&&<div className="menu-filters" role="group" aria-label="长期偏好品类">
           {categories.map(name=><button type="button" key={name} aria-pressed={name===profileCategory} onClick={()=>setProfileCategory(name)}>{name}</button>)}
-          <button type="button" aria-pressed={profileCategory==="global"} onClick={()=>setProfileCategory("global")}>通用忌口</button>
+          <button type="button" aria-pressed={profileCategory==="global"} onClick={()=>setProfileCategory("global")}>忌口</button>
         </div>}
         <Preferences key={panel+profileCategory}
-          value={panel==="today"?{...effective(session),avoid:session.today.avoid??[]}:profileCategory==="global"?session.profile:categoryPreference(session,profileCategory)}
+          value={panel==="today"?effective(session):profileCategory==="global"?session.profile:categoryPreference(session,profileCategory)}
           scope={panel==="today"?"current":profileCategory==="global"?"global":"category"}
           category={panel==="today"?category:profileCategory==="global"?"主食":profileCategory}
           hideQuick={session.hideQuick} quick={session.quick} busy={busy}

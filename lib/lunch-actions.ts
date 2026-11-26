@@ -19,7 +19,8 @@ function noResult(session:Session) {
   const {budget,avoid,servings,maxEta}=effective(session);
   const labels=[
     selection.noSpice?"不辣":selection.flavor,
-    selection.ingredient?"含"+selection.ingredient:undefined,
+    selection.requestedDish?"想吃"+selection.requestedDish:selection.ingredient?"含"+selection.ingredient:undefined,
+    selection.method,
     selection.staple==="无"?"不含主食":selection.staple?"含"+selection.staple:undefined,
     selection.lowOil?"少油":undefined,
     selection.noFry?"非油炸":undefined,
@@ -31,7 +32,9 @@ function noResult(session:Session) {
   ].filter(Boolean);
   const budgetIsLimiting=budget!==null&&menu.some(dish=>eligible({...session,today:{...session.today,budget:null}},dish));
   const conditions=labels.length?"（"+labels.join("、")+"）":"";
-  return "模拟菜单里暂无符合条件的"+category+conditions+"。"
+  if (selection.dishIds?.length===0) return `暂无推荐的菜品。菜单里没有「${selection.requestedDish}」。`;
+  const message=selection.requestedDish?"暂无推荐的菜品":"模拟菜单里暂无符合条件的"+category;
+  return message+conditions+"。"
     +(budgetIsLimiting?"可以提高一点预算，我会继续保留忌口。":"可以调整一个条件，我会继续保留忌口。");
 }
 function mergeSelection(current:Selection, incoming:Selection) {
@@ -71,17 +74,23 @@ function attachAvoid(current:Partial<Pref>,patch:Partial<Pref>,restore:string[]=
 }
 export async function freshen(session:Session,models:Models) {
   const day=dayAt(session.offset);
-  const legacy=session.preferencesVersion!==2;
+  const legacy=session.preferencesVersion===undefined;
   if(legacy||session.day!==day) {
     if (session.day!==day) session.messages=[];
     session.day=day;
-    session.preferencesVersion=2;
     session.today={};
     session.selection=undefined;
     session.batch=null;
     delete session.ranking;
     session.pending=null;
     session.comparison=null;
+  }
+  if (session.preferencesVersion!==3) {
+    const profiles=Object.values(session.categoryProfiles??{});
+    session.profile.avoid=[...new Set([...session.profile.avoid,...profiles.flatMap(pref=>pref.avoid??[])])];
+    for (const pref of profiles) delete pref.avoid;
+    session.preferencesVersion=3;
+    delete session.ranking;
   }
   session.mode=models.provider;
   if (isLegacyDailyPreview(session)) {
@@ -118,7 +127,7 @@ export async function applyAction(session:Session,models:Models,path:string,body
         interpreted.newRequest?{}:pending?.selection??session.selection??{},
         {...interpreted.selection,category:interpreted.category}
       );
-      if (interpreted.question) {
+      if (interpreted.question && selection.dishIds?.length!==0) {
         if (interpreted.newRequest) {
           session.today={};
           session.selection={category:interpreted.category};
@@ -168,10 +177,13 @@ export async function applyAction(session:Session,models:Models,path:string,body
         if (typeof body.hideQuick==="boolean") session.hideQuick=body.hideQuick;
       } else {
         const category=categories.find(name=>name===body.category)??"主食";
-        const stored=categoryPreference(session,category);
-        const preference=body.merge?attachAvoid(stored,patch):{...stored,...patch};
-        session.categoryProfiles={...session.categoryProfiles,[category]:preference};
-        if (category!==activeCategory(session)) {
+        const {avoid,...categoryPatch}=patch;
+        if (avoid) session.profile.avoid=body.merge
+          ? [...new Set([...session.profile.avoid,...avoid])]
+          : avoid;
+        const {avoid:_unused,...stored}=categoryPreference(session,category);
+        session.categoryProfiles={...session.categoryProfiles,[category]:{...stored,...categoryPatch}};
+        if (category!==activeCategory(session) && !avoid) {
           await refreshRanking(session,models);
           return session;
         }

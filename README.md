@@ -28,4 +28,12 @@ npm start
 
 ## GitHub Pages
 
-执行 `npm run build:pages` 生成 `dist/pages`。将产物发布到 `gh-pages` 分支根目录，并保留 `.nojekyll`。公开访客可免登录使用。默认连接午餐助手的线上 API，使用服务端百炼模型和录音转写。该 API 将 GitHub Pages 的独立会话通过 CORS 返回给浏览器，不需要跨站 Cookie。若首次打开时 API 无法连接，页面切换到当前浏览器内的规则推荐、偏好与模拟订单；语音此时取决于浏览器支持，也可以配置访客自己的百炼 Key。
+部署好上面的 Cloudflare Worker 后，在仓库根目录执行：
+
+```sh
+VITE_LUNCH_API_ORIGIN=https://takeaway.<你的子域>.workers.dev npm run build:pages
+```
+
+将地址替换为实际 Worker 的 HTTPS 域名，也可以使用 Worker 绑定的自定义域名。将 `dist/pages` 的产物发布到 `gh-pages` 分支根目录，并保留 `.nojekyll`。GitHub Pages 访客无需登录，浏览器会直接向 Worker 请求 `/api`。Worker 允许 `https://double-bean.github.io` 跨域访问，以会话头维护访客身份。
+
+未设置 Worker 地址或首次连接失败时，页面使用本地规则和浏览器内的演示会话；云端文字模型与录音转写需要可达的 Worker 和服务端百炼密钥。切换线上地址前，分别从中国大陆网络测试页面加载、文字推荐和录音转写。

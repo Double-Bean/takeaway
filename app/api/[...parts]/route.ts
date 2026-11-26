@@ -85,7 +85,7 @@ async function get(request:Request,{params}:Context) {
     if (fromPages(request)&&!row&&!identity.created) identity={id:uuid(),created:true};
     const model=models(env);
     const state:Session=row?JSON.parse(row.state):seed();
-    const refresh=!row||state.preferencesVersion!==2||state.day!==dayAt(state.offset)||state.mode!==model.provider;
+    const refresh=!row||state.preferencesVersion!==3||state.day!==dayAt(state.offset)||state.mode!==model.provider;
     await freshen(state,model);
     const legacyDaily=path==="session"&&needsLegacyDailyCard(request,state);
     if (legacyDaily) await applyAction(state,model,"recommendations/daily",{});

@@ -32,7 +32,7 @@ async function sessionResponse(response:Response) {
   return data;
 }
 
-export function createPagesTransport(backend:string,fetcher:typeof fetch=fetch,storage=()=>localStorage) {
+export function createPagesTransport(backend:string|undefined,fetcher:typeof fetch=fetch,storage=()=>localStorage) {
   const localModel=models({});
   let token:string|null=null;
   let usingBackend=false;
@@ -53,7 +53,7 @@ export function createPagesTransport(backend:string,fetcher:typeof fetch=fetch,s
     try {
       const saved=readStorage(storageKey);
       const parsed=saved?JSON.parse(saved) as Session:undefined;
-      if (parsed?.preferencesVersion===2 && parsed.profile && Array.isArray(parsed.orders)) {localChanged=true;return parsed;}
+      if ((parsed?.preferencesVersion===2 || parsed?.preferencesVersion===3) && parsed.profile && Array.isArray(parsed.orders)) {localChanged=true;return parsed;}
     } catch { /* A corrupted session can be replaced with the sample state. */ }
     return seed();
   }
@@ -78,16 +78,14 @@ export function createPagesTransport(backend:string,fetcher:typeof fetch=fetch,s
 
   return {
     async load() {
-      try {return await retry(connect);}
-      catch {
-        usingBackend=false;
-        const session=await freshen(localSession??restore(),localModel);
-        localSession=session;
-        return session;
-      }
+      try {if (backend) return await retry(connect); }
+      catch { /* Keep the local session usable when the cloud is unreachable. */ }
+      usingBackend=false;
+      localSession=await freshen(localSession??restore(),localModel);
+      return localSession;
     },
     async act(path:string,body:Record<string,unknown>) {
-      if (!usingBackend && !localChanged && ["messages","recommendations/daily","preferences/today"].includes(path)) {
+      if (backend && !usingBackend && !localChanged && ["messages","recommendations/daily","preferences/today"].includes(path)) {
         // A cold-start timeout can clear while the visitor chooses what to eat.
         // Once offline work exists, reconnect explicitly so it is not discarded silently.
         try {await connect();} catch { /* Continue in the existing local session. */ }

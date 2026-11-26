@@ -3,7 +3,8 @@ import LunchApp from "@/components/lunch-app";
 import { createPagesTransport } from "@/lib/lunch-pages-transport";
 import "@/app/globals.css";
 
-const transport=createPagesTransport("https://lunch-chat-5529.cladswan16.chatgpt.site/api/");
+declare const __LUNCH_API_BASE__:string|null;
+const transport=createPagesTransport(__LUNCH_API_BASE__??undefined);
 const root=document.getElementById("root");
 if (!root) throw new Error("Missing application root.");
 createRoot(root).render(<LunchApp transport={transport} />);

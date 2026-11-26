@@ -303,7 +303,7 @@ try {
       if (actual.length===1) await applyAction(s,local,"feedback",{...previous,reason:"今天不想吃这个口味"});
     }
     assert.deepEqual(actual.slice().sort(),expected.slice().sort());
-    assert.equal(s.ranking.ids.length,10);
+    assert.equal(s.ranking.ids.length,0);
     assert.equal(s.ranking.matchCount,0);
     assert.match(s.messages.at(-1).text,new RegExp("本轮|这轮符合条件的 "+expected.length+" 道菜都看过了"));
     console.log("换菜穷尽 | "+actual.length+" 道，全部可达");
@@ -331,6 +331,34 @@ try {
     assert.match(s.messages.at(-1).text,/暂无符合条件的主食.*香辣.*5 元以内/);
     assert.match(s.messages.at(-1).text,/提高一点预算/);
     assert.equal(effective(s).budget,5);
+  });
+  await check("指定菜名、油炸方式和无匹配都严格过滤",async()=>{
+    const s=await start();
+    await send(s,"想吃炸猪排饭");
+    assert.equal(card(s).dish.name,"日式炸猪排饭");
+    assert.deepEqual(s.ranking.ids,[card(s).dish.id]);
+    await send(s,"想吃牛肉汉堡");
+    assert.equal(card(s),null);
+    assert.match(s.messages.at(-1).text,/暂无推荐的菜品.*牛肉汉堡/);
+    assert.deepEqual(s.ranking.ids,[]);
+    await send(s,"想吃点油炸小吃");
+    assert.equal(card(s).dish.method,"油炸");
+    assert.equal(card(s).dish.category,"零食");
+    await send(s,"想吃炸虾天妇罗，不吃虾");
+    assert.equal(card(s),null);
+    assert.deepEqual(s.ranking.ids,[]);
+  });
+  await check("旧版按品类存放的忌口合并并跨类别生效",async()=>{
+    const s=await start();
+    s.preferencesVersion=2;
+    s.categoryProfiles={水果:{avoid:["芒果"]},甜点:{avoid:["奶","芒果"],budget:20}};
+    await freshen(s,local);
+    assert.equal(s.preferencesVersion,3);
+    assert.deepEqual(effective(s).avoid,["花生","芒果","奶"]);
+    assert.equal(categoryPreference(s,"甜点").budget,20);
+    assert.deepEqual(s.categoryProfiles.水果,{});
+    await send(s,"想吃芒果");
+    assert.match(s.messages.at(-1).text,/芒果.*忌口/);
   });
   await check("默认百炼 Key 为文字和语音使用北京地域端点",async()=>{
     const backend=models({LUNCH_DEFAULT_BAILIAN_KEY:"fixture-default"});
@@ -363,13 +391,14 @@ try {
     assert.equal(card(s).dish.flavor,"香辣");
     assert(card(s).dish.price<=25);
   });
-  await check("分品类长期偏好、通用忌口和本轮条件互不写入",async()=>{
+  await check("长期忌口适用于所有类别，更新列表后不保留已删除项",async()=>{
     const s=await start();
     await applyAction(s,local,"preferences/profile",{category:"水果",patch:{budget:13,flavor:"甜味",avoid:["西瓜"]}});
+    assert.deepEqual(effective(s).avoid,["西瓜"]);
     await applyAction(s,local,"preferences/profile",{scope:"global",patch:{avoid:["花生","香菜"]}});
     await send(s,"来份水果");
     assert.equal(effective(s).budget,13);
-    assert.deepEqual(effective(s).avoid,["花生","香菜","西瓜"]);
+    assert.deepEqual(effective(s).avoid,["花生","香菜"]);
     await send(s,"不要苹果");
     assert(!categoryPreference(s,"水果").avoid.includes("苹果"));
     await send(s,"以后水果的预算12元");
@@ -485,7 +514,7 @@ try {
     assert.equal(s.ranking.ids[0],card(s).dish.id);
     await send(s,"想吃主食，1 元以内");
     assert.equal(card(s),null);
-    assert.equal(s.ranking.ids.length,10);
+    assert.equal(s.ranking.ids.length,0);
     assert.equal(s.ranking.matchCount,0);
   });
   await check("已保存的旧会话补齐排名，未触发新推荐",async()=>{
