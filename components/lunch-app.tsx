@@ -148,6 +148,7 @@ const names:Record<Panel,string>={api:"API 设置",profile:"长期偏好",today:
 export type LunchTransport = {
   load():Promise<Session>;
   act(path:string, body:Record<string,unknown>):Promise<Session>;
+  transcribe?(audio:FormData,signal:AbortSignal):Promise<Response>;
 };
 
 export default function LunchApp({transport}:{transport?:LunchTransport}) {
@@ -364,7 +365,9 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
           const extension=type.includes("mp4")?"m4a":type.includes("ogg")?"ogg":"webm";
           if(session?.mode==="dashscope") form.set("audio",await toSpeechWav(file));
           else form.set("audio",file,`lunch.${extension}`);
-          const result=await fetch("/api/transcriptions",{method:"POST",body:form,signal:AbortSignal.timeout(23000)});
+          const signal=AbortSignal.timeout(23000);
+          const result=transport?.transcribe?await transport.transcribe(form,signal):
+            await fetch("/api/transcriptions",{method:"POST",body:form,signal});
           const data=await result.json() as {error?:string;text:string};
           if (!result.ok) {
             if (result.status===503 && !cancelled.current) {

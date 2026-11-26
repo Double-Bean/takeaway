@@ -28,4 +28,4 @@ npm start
 
 ## GitHub Pages
 
-执行 `npm run build:pages` 生成 `dist/pages`。将产物发布到 `gh-pages` 分支根目录，并保留 `.nojekyll`。公开访客可免登录使用。推荐、偏好、反馈和模拟订单由浏览器处理并保存在当前浏览器。语音识别取决于浏览器支持；如需要百炼，可在页面中配置访客自己的 Key。
+执行 `npm run build:pages` 生成 `dist/pages`。将产物发布到 `gh-pages` 分支根目录，并保留 `.nojekyll`。公开访客可免登录使用。默认连接午餐助手的线上 API，使用服务端百炼模型和录音转写。该 API 将 GitHub Pages 的独立会话通过 CORS 返回给浏览器，不需要跨站 Cookie。若首次打开时 API 无法连接，页面切换到当前浏览器内的规则推荐、偏好与模拟订单；语音此时取决于浏览器支持，也可以配置访客自己的百炼 Key。
