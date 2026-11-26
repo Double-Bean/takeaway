@@ -1,3 +1,4 @@
+import { timeoutSignal } from "./lunch-network";
 import { modelOptions, omniModel, type PersonalModelId } from "./lunch-byok";
 
 export type Models = { provider:"openai"|"dashscope"|"local"; base:string; key:string; speechKey:string; text:string; vector:string; speech:string };
@@ -47,7 +48,7 @@ async function sendRequest(model:Models, path:string, body:FormData|object, time
   const headers = new Headers({ Authorization:`Bearer ${credential}` });
   if (!(body instanceof FormData)) headers.set("Content-Type","application/json");
   const response = await fetch(model.base + path, {
-    method:"POST", redirect:"manual", headers, body:body instanceof FormData ? body : JSON.stringify(body), signal:AbortSignal.timeout(timeout)
+    method:"POST", redirect:"manual", headers, body:body instanceof FormData ? body : JSON.stringify(body), signal:timeoutSignal(timeout)
   });
   // Workers supports manual redirects. Reject any non-success response
   // so a credential is never forwarded to a different destination.

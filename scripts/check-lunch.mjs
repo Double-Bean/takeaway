@@ -8,7 +8,7 @@ import { join } from "node:path";
 const target = mkdtempSync(join(tmpdir(), "lunch-check-"));
 try {
   execFileSync("./node_modules/.bin/tsc", [
-    "lib/lunch-actions.ts", "--outDir", target, "--target", "es2023", "--module", "commonjs", "--types", "node", "--strict", "--skipLibCheck"
+    "lib/lunch-actions.ts", "lib/lunch-pages-transport.ts", "--outDir", target, "--target", "es2023", "--module", "commonjs", "--types", "node", "--strict", "--skipLibCheck"
   ], {stdio:"inherit"});
   const require = createRequire(import.meta.url);
   const { categories, foods, menu } = require(join(target,"lunch-data.js"));
@@ -16,6 +16,7 @@ try {
   const { omniModel, normalizeApiKey } = require(join(target,"lunch-byok.js"));
   const { ask, connectionError, embeddings, models, personalModels, transcribe } = require(join(target,"lunch-models.js"));
   const { applyAction, freshen } = require(join(target,"lunch-actions.js"));
+  const { createPagesTransport } = require(join(target,"lunch-pages-transport.js"));
   const local=models({});
   const start=async()=>applyAction(await freshen(seed(),local),local,"recommendations/daily",{});
   const send=(s,text)=>applyAction(s,local,"messages",{text});
@@ -416,6 +417,49 @@ try {
       await applyAction(s,model,"messages",{text:"今天想吃一点辣的面条"});
       assert.equal(card(s).mode.reason,"事实模板");
     } finally {globalThis.fetch=original;}
+  });
+  await check("人数与预计送达时间同时参与推荐、榜单和下单，保留忌口",async()=>{
+    const s=await freshen(seed(),local);
+    await applyAction(s,local,"preferences/today",{patch:{servings:2,maxEta:30}});
+    assert.equal(card(s).dish.servings,2);
+    assert(card(s).dish.eta<=30 && !card(s).dish.ingredients.includes("花生"));
+    for(const id of s.ranking.ids.slice(0,s.ranking.matchCount)) {
+      const dish=menu.find(option=>option.id===id);
+      assert.equal(dish.servings,2);
+      assert(dish.eta<=30);
+    }
+    await applyAction(s,local,"orders",args(s));
+    assert.equal(simulated(s)[0].dish.servings,2);
+    assert.equal(effective(s).servings,undefined);
+    await send(s,"想吃主食，三人份，三十分钟内送达");
+    assert.equal(card(s).dish.servings,3);
+    assert(card(s).dish.eta<=30);
+    await applyAction(s,local,"preferences/today",{patch:{maxEta:10}});
+    assert.equal(card(s),null);
+    assert.match(s.messages.at(-1).text,/10 分钟内送达/);
+  });
+  await check("匿名打开时的网络错误可恢复，云端写入重试沿用原请求ID",async()=>{
+    let sessionRequests=0,writeRequests=0;
+    const bodies=[];
+    const cloud=await freshen(seed(),models({LUNCH_DEFAULT_BAILIAN_KEY:"fixture"}));
+    const fetcher=async(url,options)=>{
+      if(url.includes("/session?")) {
+        sessionRequests++;
+        if(sessionRequests<=2) throw new TypeError("Temporary browser network error");
+        return Response.json(cloud,{headers:{"X-Lunch-Session":"fixture-session"}});
+      }
+      assert.equal(options.credentials,"omit");
+      assert.equal(options.headers.get("X-Lunch-Session"),"fixture-session");
+      bodies.push(options.body);
+      if(++writeRequests===1) return new Response("Gateway Timeout",{status:504});
+      return Response.json(cloud);
+    };
+    const transport=createPagesTransport("https://lunch.example/api/",fetcher,()=>{throw Error("Storage denied");});
+    assert.equal((await transport.load()).mode,"local");
+    assert.equal((await transport.act("messages",{text:"想吃饭",requestId:"fixture-id"})).mode,"dashscope");
+    assert.equal(sessionRequests,3);
+    assert.equal(writeRequests,2);
+    assert.equal(bodies[0],bodies[1]);
   });
   await check("开场无消息即有十道排名，筛选后匹配菜优先且数量固定",async()=>{
     const s=await freshen(seed(),local);

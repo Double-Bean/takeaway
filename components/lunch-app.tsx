@@ -8,7 +8,8 @@ import type { PersonalModelId } from "@/lib/lunch-byok";
 import { LunchApiSettings } from "@/components/lunch-api-settings";
 import { isLegacyDailyPreview } from "@/lib/lunch-actions";
 import { toSpeechWav } from "@/lib/lunch-audio";
-import { activeCategory, categoryPreference, effective, requestInterpretation } from "@/lib/lunch-engine";
+import { activeCategory, categoryPreference, effective, requestInterpretation, uuid } from "@/lib/lunch-engine";
+import { timeoutSignal } from "@/lib/lunch-network";
 import { ask, connectionError, personalModels, transcribe, type Models } from "@/lib/lunch-models";
 
 type Panel = "profile"|"today"|"evidence"|"orders"|"compare"|"confirm"|"microphone"|"api"|"menu";
@@ -19,6 +20,10 @@ type NativeSpeech = {
   onerror:(()=>void)|null; onend:(()=>void)|null;
   start:()=>void; stop:()=>void; abort:()=>void;
 };
+function browserSpeech() {
+  const speechWindow=window as unknown as {SpeechRecognition?:new()=>NativeSpeech;webkitSpeechRecognition?:new()=>NativeSpeech};
+  return speechWindow.SpeechRecognition??speechWindow.webkitSpeechRecognition;
+}
 const dateLabel=(date:string)=>date.slice(5).replace("-"," 月 ")+" 日";
 const displayPrice=(price:number)=>Number(price.toFixed(2));
 function PrefChips({value,category,staple,onClick}:{value:Pref;category:Category;staple?:Dish["staple"];onClick:()=>void}) {
@@ -27,6 +32,8 @@ function PrefChips({value,category,staple,onClick}:{value:Pref;category:Category
     value.budget!==null?`¥${displayPrice(value.budget)} 内`:value.target!==null?`约 ¥${value.target}`:"预算不限",
     value.flavor==="不限"?"不限口味":`偏${value.flavor}`,
     ...(category==="主食"?(staple&&staple!=="无"?[staple]:staple==="无"?["不含主食"]:value.staple!=="不限"?[value.staple]:[]):[]),
+    ...(value.servings?[value.servings+" 人份"]:[]),
+    ...(value.maxEta?[value.maxEta+" 分钟内"]:[]),
     ...(value.avoid.length?[`避开${value.avoid.join("、")}`]:[])
   ];
   return <div className="condition-chips">{tags.map(tag=><button key={tag} type="button" onClick={onClick}>{tag}</button>)}</div>;
@@ -62,12 +69,20 @@ function Preferences({value,hideQuick,scope,category,quick,onSave,onReset,onDele
       <label>预算上限（元）<input type="number" min="1" max="300" step="0.01" placeholder="不限" value={draft.budget??""} onChange={e=>setDraft(old=>({...old,budget:e.target.value?Number(e.target.value):null,target:null}))}/></label>
       <label>口味<select value={draft.flavor} onChange={e=>update("flavor",e.target.value as Pref["flavor"])}>{["不限",...flavors].map(x=><option key={x}>{x}</option>)}</select></label>
       {category==="主食"&&<label>主食<select value={draft.staple} onChange={e=>update("staple",e.target.value as Pref["staple"])}>{staples.map(x=><option key={x}>{x}</option>)}</select></label>}
+      {scope==="current"&&<>
+        <label>人数<select value={draft.servings??""} onChange={e=>update("servings",e.target.value?Number(e.target.value):null)}>
+          <option value="">不限</option>{[1,2,3,4].map(n=><option key={n} value={n}>{n} 人份</option>)}
+        </select></label>
+        <label>送达时间<select value={draft.maxEta??""} onChange={e=>update("maxEta",e.target.value?Number(e.target.value):null)}>
+          <option value="">不限</option>{[...new Set([25,30,35,40,45,...(draft.maxEta?[draft.maxEta]:[])])].sort((a,b)=>a-b).map(n=><option key={n} value={n}>{n} 分钟内</option>)}
+        </select></label>
+      </>}
     </div>
     <div className="checks">
       <label><input type="checkbox" checked={draft.lowOil} onChange={e=>update("lowOil",e.target.checked)}/>优先少油</label>
       <label><input type="checkbox" checked={draft.noFry} onChange={e=>update("noFry",e.target.checked)}/>优先非油炸</label>
     </div></>}
-      <div className="avoid-head"><strong>{scope==="global"?"通用忌口":scope==="category"?"该品类避开的食材":"本轮避开的食材"}</strong><input aria-label="搜索食材" placeholder="搜索食材" value={ingredient} onChange={e=>setIngredient(e.target.value)}/></div>
+      <div className="avoid-head"><strong>忌口</strong><input aria-label="搜索食材" placeholder="搜索食材" value={ingredient} onChange={e=>setIngredient(e.target.value)}/></div>
       <div className="ingredient-list">{foods.filter(x=>x.includes(ingredient)).map(food=><button className={draft.avoid.includes(food)?"chosen":""} type="button" key={food} aria-pressed={draft.avoid.includes(food)}
         onClick={()=>update("avoid",draft.avoid.includes(food)?draft.avoid.filter(x=>x!==food):[...draft.avoid,food])}>{food}</button>)}
         {!foods.some(x=>x.includes(ingredient))&&<p className="muted">没有匹配的食材。</p>}
@@ -115,7 +130,7 @@ function MenuBrowser() {
 
 function DishCard({card,active,onOrder,onNext,onEvidence,busy}:{card:Card;active:boolean;onOrder:()=>void;onNext:()=>void;onEvidence:()=>void;busy:boolean}) {
   const dish=card.dish;
-  const tags=[dish.flavor,dish.category&&dish.category!=="主食"?dish.category:dish.lowOil?"少油":dish.method,dish.staple==="无"?"不含主食":`含${dish.staple}`];
+  const tags=[...(dish.servings>1?[dish.portion]:[]),dish.flavor,dish.category&&dish.category!=="主食"?dish.category:dish.lowOil?"少油":dish.method,dish.staple==="无"?"不含主食":`含${dish.staple}`];
   return <article className={"dish-card"+(active?"":" previous")}>
     <div className="dish-top">
       <div className="dish-photo"><DishVisual dish={dish} hero/><span>菜品示意图</span></div>
@@ -198,6 +213,9 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
   }
 
   async function load() {
+    if(lock.current)return;
+    lock.current=true;
+    setBusy(true);
     setError("");
     try {
       if (transport) {
@@ -209,6 +227,7 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
       if(!response.ok) throw new Error(data.error);
       setSession(data);
     } catch(e) {setError(e instanceof Error?e.message:"连接失败，请重试。");}
+    finally {lock.current=false;setBusy(false);}
   }
 
   useEffect(()=>{void load();},[]);
@@ -260,7 +279,7 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
           setHint(connectionError(error)+" 本次按基础规则推荐。");
         }
       }
-      const payload={...body,modelPatch,usePersonalModel:Boolean(customConnection.current),requestId:crypto.randomUUID()};
+      const payload={...body,modelPatch,usePersonalModel:Boolean(customConnection.current),requestId:uuid()};
       let data:Session;
       if (transport) data=await transport.act(path,payload);
       else {
@@ -322,8 +341,7 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
     cancelled.current=false;
     const personal=customConnection.current;
     if(!personal&&(speechFallback||session?.mode==="local")) {
-      const speechWindow=window as unknown as {SpeechRecognition?:new()=>NativeSpeech;webkitSpeechRecognition?:new()=>NativeSpeech};
-      const Speech=speechWindow.SpeechRecognition??speechWindow.webkitSpeechRecognition;
+      const Speech=browserSpeech();
       if(!Speech){setHint("当前浏览器没有语音转写，云端模型也未配置。可以直接打字。");return;}
       const service=new Speech();
       let transcript="";
@@ -367,23 +385,29 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
           const extension=type.includes("mp4")?"m4a":type.includes("ogg")?"ogg":"webm";
           if(session?.mode==="dashscope") form.set("audio",await toSpeechWav(file));
           else form.set("audio",file,`lunch.${extension}`);
-          const signal=AbortSignal.timeout(23000);
+          const signal=timeoutSignal(23000);
           const result=transport?.transcribe?await transport.transcribe(form,signal):
             await fetch("/api/transcriptions",{method:"POST",body:form,signal});
-          const data=await result.json() as {error?:string;text:string};
+          const data=await result.json().catch(()=>null) as {error?:string;text?:string}|null;
           if (!result.ok) {
-            if (result.status===503 && !cancelled.current) {
-              const speechWindow=window as unknown as {SpeechRecognition?:new()=>NativeSpeech;webkitSpeechRecognition?:new()=>NativeSpeech};
-              if (speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition) {
-                setSpeechFallback(true);
-                microphoneConsent.current=false;
-                throw new Error("百炼语音暂时不可用。再点一次麦克风，可改用浏览器转写。");
-              }
+            if ([429,502,503,504].includes(result.status) && !cancelled.current && browserSpeech()) {
+              setSpeechFallback(true);
+              microphoneConsent.current=false;
+              setHint("云端语音暂时不可用。再点一次麦克风，可改用浏览器转写。");
+              return;
             }
-            throw new Error(data.error||"转写失败，可以重录。");
+            throw new Error(data?.error||"转写失败，可以重录。");
           }
-          if(!cancelled.current)finishVoice(data.text);
-        } catch(e){if(!cancelled.current)setHint(e instanceof Error?e.message:"转写失败，可以重录或打字。");}
+          if(!cancelled.current)finishVoice(data?.text??"");
+        } catch(error) {
+          if(cancelled.current)return;
+          const networkOrDecode=error instanceof TypeError||error instanceof Error&&["AbortError","TimeoutError","EncodingError","NotSupportedError"].includes(error.name);
+          if (!personal&&networkOrDecode&&browserSpeech()) {
+            setSpeechFallback(true);
+            microphoneConsent.current=false;
+            setHint("云端录音暂时不可用。再点一次麦克风，可改用浏览器转写。");
+          } else setHint(networkOrDecode?"录音转写暂时不可用，可以重录或打字。":error instanceof Error?error.message:"转写失败，可以重录或打字。");
+        }
         finally{setRecording("off");}
       };
       media.onerror=()=>{setHint("录音出错，可以重录。");stopVoice(true);};
@@ -400,9 +424,9 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
   const category=session?activeCategory(session):"主食";
   const conditions=session?effective(session):null;
   const visibleQuick=session?.quick.slice(0,3)??[];
-  const lastMessage=session?.messages.at(-1);
+  const lastMessage=messages[messages.length-1];
   const showInitial=messages.length===1 && messages[0].role==="assistant" && Boolean(messages[0].card);
-  const activeCardId=session?.messages.findLast(m=>m.card?.id===current?.id&&m.card?.dish.id===current?.dish.id)?.id;
+  const activeCardId=[...messages].reverse().find(m=>m.card?.id===current?.id&&m.card?.dish.id===current?.dish.id)?.id;
   return <div className="shell" ref={shell}>
     <header className="topbar"><div className="top-inner">
       <button className="brand" type="button" aria-label="午餐助手首页" onClick={()=>{setWelcome(true);feed.current?.scrollTo(0,0);}}><span className="brand-icon"><ChefHat size={21}/></span><strong>午餐助手</strong></button>
@@ -425,6 +449,7 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
         <div className="welcome-links">
           <button className="browse-menu" type="button" onClick={()=>setPanel("menu")}><MenuIcon size={16}/> 浏览菜单</button>
           <button className="browse-menu" type="button" disabled={!session} onClick={()=>setPanel("compare")}>排序</button>
+          <button className="browse-menu" type="button" disabled={!session} onClick={()=>setPanel("today")}>筛选</button>
         </div>
         {!session&&error&&<p className="welcome-error" role="alert">{error}</p>}
       </section>:<div className="conversation">
@@ -459,6 +484,7 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
     </main>
     <footer className="composer">
       <div className="composer-inner">
+        {transport&&session?.mode==="local"&&<div className="composer-hint">本地推荐模式<button type="button" className="text-btn" disabled={busy||recording!=="off"} onClick={()=>void load()}>重连 AI</button></div>}
         {error&&session&&<div role="alert" className="inline-error">{error}</div>}
         {draggingDraft&&<div className="composer-hint">替换当前草稿？ <button className="text-btn" onClick={()=>{setDraft(draggingDraft);setDraggingDraft(null);input.current?.focus();}}>替换</button> <button className="text-btn" onClick={()=>setDraggingDraft(null)}>取消</button></div>}
         {hint&&<div className="composer-hint" role="status">{hint}<button className="text-btn" aria-label="关闭提示" onClick={()=>setHint("")}><X size={15}/></button></div>}
@@ -490,7 +516,7 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
           hideQuick={session.hideQuick} quick={session.quick} busy={busy}
           onDelete={id=>void act("quick-inputs",{id},false)}
           onReset={async()=>{if(await act("preferences/today",{reset:true}))setPanel(null);}}
-          onSave={async(patch,hideQuick)=>{if(await act(`preferences/${panel}`,{patch,hideQuick,category:profileCategory,scope:profileCategory==="global"?"global":"category"}))setPanel(null);}}/>
+          onSave={async(patch,hideQuick)=>{if(await act(`preferences/${panel}`,{patch,hideQuick,category:profileCategory,scope:profileCategory==="global"?"global":"category"})){if(panel==="today")setWelcome(false);setPanel(null);}}}/>
         {panel==="profile"&&<div className="drawer-links"><button onClick={()=>setPanel("orders")}><History size={17}/> 历史订单 <ChevronRight size={17}/></button></div>}
       </>}
       {panel==="api"&&<LunchApiSettings active={activeModel} onApply={setConnection}/>}

@@ -16,7 +16,7 @@ function add(session:Session, message:Omit<Message,"id">) {
 function noResult(session:Session) {
   const selection=session.selection??{};
   const category=activeCategory(session);
-  const {budget,avoid}=effective(session);
+  const {budget,avoid,servings,maxEta}=effective(session);
   const labels=[
     selection.noSpice?"不辣":selection.flavor,
     selection.ingredient?"含"+selection.ingredient:undefined,
@@ -24,6 +24,8 @@ function noResult(session:Session) {
     selection.lowOil?"少油":undefined,
     selection.noFry?"非油炸":undefined,
     selection.meatless?"不含肉类":undefined,
+    servings?servings+" 人份":undefined,
+    maxEta?maxEta+" 分钟内送达":undefined,
     budget===null?undefined:budget+" 元以内",
     avoid.length?"避开"+avoid.join("、"):undefined,
   ].filter(Boolean);

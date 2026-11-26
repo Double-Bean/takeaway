@@ -10,7 +10,14 @@ export function moveDay(day:string,offset:number) {
   date.setUTCDate(date.getUTCDate()+offset);
   return date.toISOString().slice(0,10);
 }
-export const uuid = () => crypto.randomUUID();
+export function uuid() {
+  if (typeof crypto.randomUUID==="function") return crypto.randomUUID();
+  const bytes=crypto.getRandomValues(new Uint8Array(16));
+  bytes[6]=(bytes[6]&15)|64;
+  bytes[8]=(bytes[8]&63)|128;
+  const hex=Array.from(bytes,byte=>byte.toString(16).padStart(2,"0")).join("");
+  return [hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join("-");
+}
 
 export function seed(offset=0):Session {
   const day=dayAt(offset);
@@ -46,6 +53,8 @@ export function validPatch(input:unknown):Partial<Pref> {
     const value=raw[key];
     if (value===null || (typeof value==="number" && Number.isFinite(value) && value>=1 && value<=300)) patch[key]=value;
   }
+  if(raw.servings===null || typeof raw.servings==="number" && [1,2,3,4].includes(raw.servings)) patch.servings=raw.servings;
+  if(raw.maxEta===null || typeof raw.maxEta==="number" && Number.isInteger(raw.maxEta) && raw.maxEta>=1 && raw.maxEta<=120) patch.maxEta=raw.maxEta;
   if (raw.flavor==="不限" || flavors.some(f=>f===raw.flavor)) patch.flavor=raw.flavor as Pref["flavor"];
   if (staples.some(f=>f===raw.staple)) patch.staple=raw.staple as Pref["staple"];
   if (Array.isArray(raw.avoid)) patch.avoid=foods.filter(food=>(raw.avoid as unknown[]).includes(food));
@@ -106,6 +115,12 @@ export function ruleIntent(text:string,session:Session) {
   if (/不限(制)?预算|预算不限|不设预算|取消预算限制/.test(query)) Object.assign(patch,{budget:null,target:null});
   const flavorClauses=query.split(/[，。；、！？]/);
   const softFlavor=flavorClauses.some(clause=>/^(?:最好|优先|尽量|偏向)(?:吃|来点)?(?:清淡|清爽|香辣|麻辣|辣|鲜香|酸甜|甜味)/.test(clause));
+  const people=query.match(/(\d+|[一二两三四])个?人(?:份|(?:一起)?吃)/);
+  const eta=query.match(/(\d+|[一二两三四五六七八九十]{1,3})分钟(?:以内|之内|内|送到|送达)/);
+  if (people && [1,2,3,4].includes(amount(people[1]))) patch.servings=amount(people[1]);
+  if (eta && amount(eta[1])>=1 && amount(eta[1])<=120) patch.maxEta=amount(eta[1]);
+  if (/人数不限|份数不限/.test(query)) patch.servings=null;
+  if (/不限送达时间|送达时间不限/.test(query)) patch.maxEta=null;
   const noSpice=/不辣|别太辣|不(?:要|想|能)?吃(?:太|很)?辣|(?:不要|别放|不加)辣/.test(query);
   if (noSpice) {
     selection.noSpice=true;
@@ -232,6 +247,8 @@ export async function interpret(text:string,session:Session,context:Models,clien
     const proposal=validPatch(result.patch);
     // Model-only preferences can refine ranking, while explicit rules control eligibility.
     if (!("budget" in rule.patch)) delete proposal.budget;
+    delete proposal.servings;
+    delete proposal.maxEta;
     if (!("avoid" in rule.patch)) delete proposal.avoid;
     if (!/主食|米饭|配饭|面条|杂粮/.test(rule.meaning)) delete proposal.staple;
     if (!/便宜|价格|预算|元|块/.test(rule.meaning)) delete proposal.target;
@@ -268,6 +285,7 @@ export function eligible(session:Session,dish:Dish,blockedMains=yesterdayMains(s
     && (!selection.lowOil || dish.lowOil)
     && (!selection.noFry || dish.method!=="油炸")
     && (!selection.meatless || !dish.ingredients.includes("?") && !dish.ingredients.some(food=>meat.includes(food)))
+    && (!p.servings || dish.servings===p.servings) && (!p.maxEta || dish.eta<=p.maxEta)
     && inService(dish,blockedMains) && (p.budget===null || dish.price<=p.budget)
     && (!p.avoid.length || !dish.ingredients.includes("?") && !dish.ingredients.some(food=>p.avoid.includes(food)));
 }
@@ -365,6 +383,8 @@ export async function choose(session:Session,context:Models,query="",seen:string
       `「${dish.name}」菜单记录显示${dish.method}`,
       dish.category!=="主食"?`菜单分类为「${dish.category}」`:dish.staple==="无"?"这份餐没有主食":`套餐包含${dish.staple}`,
       ...(conditions.budget===null?[]:[`到手价 ¥${dish.price}，在 ¥${conditions.budget} 以内`]),
+      ...(conditions.servings?[`菜单标注 ${dish.servings} 人份`]:[]),
+      ...(conditions.maxEta?[`预计 ${dish.eta} 分钟送达`]:[]),
       ...(dish.lowOil?["菜单标注少油"]:[]),
       ...(conditions.flavor!=="不限"&&dish.flavor===conditions.flavor?[`口味符合你想吃的「${conditions.flavor}」`]:[])
     ];
@@ -392,8 +412,7 @@ export async function choose(session:Session,context:Models,query="",seen:string
 }
 
 export async function compareFeedback(session:Session,event:Feedback,context:Models):Promise<Comparison> {
-  const before=structuredClone(session);
-  before.feedback=before.feedback.filter(e=>e!==event && !(e.batchId===event.batchId&&e.dishId===event.dishId&&e.kind===event.kind));
+  const before={...session,feedback:session.feedback.filter(e=>e!==event && !(e.batchId===event.batchId&&e.dishId===event.dishId&&e.kind===event.kind))};
   // A reason changes the existing skip; compare against an otherwise identical skip.
   if (event.kind==="skip"&&event.reason) before.feedback.push({...event,reason:undefined});
   const query=session.batch?.query??"";

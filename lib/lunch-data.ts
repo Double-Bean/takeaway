@@ -89,11 +89,20 @@ const rows: Row[] = [
   ["鲜切苹果盒","apple-box",8,0,"甜味","鲜切","无","苹果",true,"水果"]
 ];
 const portions:Record<Category,string>={"主食":"1 人份","甜点":"1 份","零食":"1 份","蔬菜":"1 小份","水果":"1 盒"};
-export const menu = rows.map(([name,main,price,shop,flavor,method,staple,ingredients,available,category="主食"],i)=>({
-  id: `D${String(i+1).padStart(2,"0")}`, name, main, price, category, shop:shops[shop], flavor, method, staple,
-  ingredients:ingredients.split(" "), portion:portions[category], image:`catalog/d${String(i+1).padStart(2,"0")}`, available:available !== false, deliverable: true,
-  lowOil:["清蒸","炖煮","汤煮","烘烤","白切","鲜切","凉拌","冷藏"].includes(method), eta:22 + shop*3 + i%3
-}));
+const sharedPortions:Record<string,2|3|4>={
+  "stew-beef":2,"tomato-beef-pot":2,"chili-shrimp":4,"tofu-veg":2,"poached-shrimp":3,
+  "redbean-coconut":2,"pumpkin-tart":3,"roasted-nuts":2,"roasted-corn":3,
+  "broccoli-side":2,"corn-pea-side":3,"cucumber-side":4,
+  "mango-pineapple-box":2,"berry-box":2,"watermelon-box":3,"banana-kiwi-box":4,
+};
+export const menu = rows.map(([name,main,price,shop,flavor,method,staple,ingredients,available,category="主食"],i)=>{
+  const servings=sharedPortions[main]??1;
+  return {
+    id: `D${String(i+1).padStart(2,"0")}`, name, main, price, category, shop:shops[shop], flavor, method, staple,
+    ingredients:ingredients.split(" "), servings, portion:servings>1?servings+" 人份":portions[category], image:`catalog/d${String(i+1).padStart(2,"0")}`, available:available !== false, deliverable: true,
+    lowOil:["清蒸","炖煮","汤煮","烘烤","白切","鲜切","凉拌","冷藏"].includes(method), eta:22 + shop*3 + i%3
+  };
+});
 export type Dish = typeof menu[number];
 export const dishById = (id:string) => menu.find(d=>d.id===id);
 export const samplePrompts = ["30 元以内，清爽一点","想吃辣，最好有米饭","想吃得清淡，25 元以内"];
