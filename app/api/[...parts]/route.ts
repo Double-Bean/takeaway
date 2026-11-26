@@ -9,6 +9,8 @@ const cookieName="lunch_visitor";
 const pagesOrigin="https://double-bean.github.io";
 const sessionHeader="X-Lunch-Session";
 const fromPages=(request:Request)=>request.headers.get("Origin")===pagesOrigin;
+const needsLegacyDailyCard=(request:Request,session:Session)=>fromPages(request)
+  && new URL(request.url).searchParams.get("daily")!=="manual" && !session.messages.length;
 const idPattern=/^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
 type Context={params:Promise<{parts:string[]}>};
 type Row={state:string;revision:number};
@@ -85,7 +87,9 @@ async function get(request:Request,{params}:Context) {
     const state:Session=row?JSON.parse(row.state):seed();
     const refresh=!row||state.preferencesVersion!==2||state.day!==dayAt(state.offset)||state.mode!==model.provider;
     await freshen(state,model);
-    if(refresh) await save(identity.id,row,state);
+    const legacyDaily=path==="session"&&needsLegacyDailyCard(request,state);
+    if (legacyDaily) await applyAction(state,model,"recommendations/daily",{});
+    if(refresh||legacyDaily) await save(identity.id,row,state);
     const response=json(path==="orders"?{orders:state.orders}:state,200,
       identity.created&&!fromPages(request)?identity.id:undefined,new URL(request.url).protocol==="https:");
     if (fromPages(request)) response.headers.set(sessionHeader,identity.id);
@@ -145,6 +149,7 @@ async function post(request:Request,{params}:Context) {
         charged=true;
       }
       const result=await applyAction(state,actionModel,path,body);
+      if (needsLegacyDailyCard(request,result)) await applyAction(result,actionModel,"recommendations/daily",{});
       result.mode=model.provider;
       result.seenActions=[...result.seenActions,body.requestId].slice(-120);
       if(await save(identity.id,row,result)) return json(result);

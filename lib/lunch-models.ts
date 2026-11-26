@@ -1,4 +1,4 @@
-import { omniModel, personalModelSettings } from "./lunch-byok";
+import { modelOptions, omniModel, type PersonalModelId } from "./lunch-byok";
 
 export type Models = { provider:"openai"|"dashscope"|"local"; base:string; key:string; speechKey:string; text:string; vector:string; speech:string };
 type Settings = Partial<Record<"LUNCH_PROVIDER"|"LUNCH_DEFAULT_BAILIAN_KEY"|"OPENAI_API_KEY"|"DASHSCOPE_API_KEY"|"DASHSCOPE_ASR_API_KEY"|"LUNCH_BASE_URL"|"LUNCH_TEXT_MODEL"|"LUNCH_EMBED_MODEL"|"LUNCH_SPEECH_MODEL", string>>;
@@ -20,25 +20,26 @@ export function models(env:Settings):Models {
   };
 }
 
-export function personalModels(key:string):Models {
-  return {provider:"dashscope",key,speechKey:key,...personalModelSettings};
+export function personalModels(key:string,id:PersonalModelId=omniModel):Models {
+  const {provider,base,speech}=modelOptions.find(option=>option.id===id)!;
+  return {provider,key,speechKey:key,base,text:id,speech,vector:""};
 }
 
 export class ModelRequestError extends Error {
   constructor(public status:number) { super("Model request failed"); }
 }
 
-export function connectionError(error:unknown, networkMessage="无法连接到百炼，请检查网络后重试。") {
+export function connectionError(error:unknown, networkMessage="无法连接到模型服务，请检查网络后重试。") {
   const status=error instanceof ModelRequestError ? error.status : 0;
-  if(status===401) return "百炼没接受这把 Key。请确认它来自华北2（北京），且没有过期或被删除。";
-  if(status===403) return "这把 Key 没有千问 3.8 Omni Flash 的调用权限。请在百炼检查模型授权。";
-  if(status===429) return "模型调用受限。请检查百炼额度或稍后再试。";
+  if(status===401) return "模型服务未接受此 API Key。请确认 Key 对应所选模型且仍有效。";
+  if(status===403) return "此 API Key 无权调用所选模型。";
+  if(status===429) return "模型调用受限。请检查服务额度或稍后再试。";
   if(status===404) return "模型或接口不存在。请检查模型名和地域。";
-  if(status===400) return "百炼拒绝了请求（HTTP 400）。";
-  if(status) return `百炼返回 HTTP ${status}，请稍后重试。`;
-  if(error instanceof Error && (error.name==="TimeoutError"||error.name==="AbortError")) return "等待百炼响应超时，请稍后重试。";
+  if(status===400) return "模型服务拒绝了请求（HTTP 400）。";
+  if(status) return `模型服务返回 HTTP ${status}，请稍后重试。`;
+  if(error instanceof Error && (error.name==="TimeoutError"||error.name==="AbortError")) return "等待模型响应超时，请稍后重试。";
   if(error instanceof TypeError) return networkMessage;
-  return "百炼响应无法解析，请稍后重试。";
+  return "模型响应无法解析，请稍后重试。";
 }
 
 async function sendRequest(model:Models, path:string, body:FormData|object, timeout:number, credential=model.key) {
@@ -111,7 +112,7 @@ export async function ask(model:Models, instruction:string, input:object, timeou
   }
   const answer = await request(model,"/chat/completions",{
     model:model.text, response_format:{type:"json_object"},
-    ...(model.provider==="openai" ? {reasoning_effort:"none",max_completion_tokens:450} : {enable_thinking:false,max_tokens:450}),
+    ...(model.provider==="openai" ? {...(model.text==="gpt-4.1-mini"?{}:{reasoning_effort:"none"}),max_completion_tokens:450} : {enable_thinking:false,max_tokens:450}),
     messages:[{role:"system",content:instruction},{role:"user",content:JSON.stringify(input)}]
   },timeout??6500) as {choices?:{message?:{content?:string}}[]};
   return JSON.parse(answer.choices?.[0]?.message?.content ?? "{}") as Record<string,unknown>;

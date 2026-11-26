@@ -13,11 +13,11 @@ try {
   const require = createRequire(import.meta.url);
   const { categories, foods, menu } = require(join(target,"lunch-data.js"));
   const { categoryPreference, compareFeedback, seed, eligible, effective, moveDay, ruleIntent } = require(join(target,"lunch-engine.js"));
-  const { omniModel, normalizeBailianKey } = require(join(target,"lunch-byok.js"));
+  const { omniModel, normalizeApiKey } = require(join(target,"lunch-byok.js"));
   const { ask, connectionError, embeddings, models, personalModels, transcribe } = require(join(target,"lunch-models.js"));
   const { applyAction, freshen } = require(join(target,"lunch-actions.js"));
   const local=models({});
-  const start=async()=>freshen(seed(),local);
+  const start=async()=>applyAction(await freshen(seed(),local),local,"recommendations/daily",{});
   const send=(s,text)=>applyAction(s,local,"messages",{text});
   const card=s=>s.batch.card;
   const args=s=>({batchId:card(s).id,dishId:card(s).dish.id});
@@ -36,9 +36,27 @@ try {
       assert(statSync(join("public","food",dish.image+".webp")).size>1000,dish.image);
     }
   });
-  await check("首屏生成有效推荐并提供订单来源",async()=>{
+  await check("查看今日推荐生成有效推荐并提供订单来源",async()=>{
     const s=await start(); assert(eligible(s,card(s).dish)); assert(card(s).orders.length>0);
     assert(card(s).orders.every(o=>s.orders.some(order=>o.id===order.id))); console.log("首推 | "+card(s).dish.name);
+  });
+  await check("直接发送时没有预置卡片，主动查看时才生成今日推荐",async()=>{
+    const s=await freshen(seed(),local);
+    assert.deepEqual(s.messages,[]);
+    assert.equal(s.batch,null);
+    await send(s,"今天想吃一点辣的面条");
+    assert.deepEqual(s.messages.map(message=>message.role),["user","assistant"]);
+    assert.equal(card(s).dish.staple,"面");
+    assert.equal(card(s).dish.flavor,"香辣");
+    await applyAction(s,local,"recommendations/daily",{});
+    assert.equal(s.messages.length,2);
+
+    const legacy=await start();
+    legacy.messages[0].text="午饭时间到了。按你平时的口味，今天可以试试这份。";
+    await freshen(legacy,local);
+    assert.deepEqual(legacy.messages,[]);
+    await send(legacy,"再便宜点");
+    assert.match(legacy.messages.at(-1).text,/多少元以内/);
   });
   await check("30 元硬预算、清爽口味、米饭偏好",async()=>{
     const s=await send(await start(),"30 元以内，清爽一点，最好有米饭");
@@ -62,13 +80,15 @@ try {
     const s=await send(await start(),"三十元左右，吃点清爽的");
     assert.equal(effective(s).budget,null); assert.equal(effective(s).target,30);
   });
-  await check("历史指代使用真实种子订单，跨店主菜仍排除",async()=>{
+  await check("历史指代识别种子订单，同主菜的跨店版本不再推荐",async()=>{
     const s=await start();
     assert.equal(ruleIntent("像昨天那种",s).historical,s.orders[0].id);
     const duplicates=menu.filter(d=>d.main===s.orders[0].dish.main);
     assert(duplicates.length===2&&duplicates.every(d=>!eligible(s,d)));
     await send(s,"想吃像昨天那种");
+    assert(card(s));
     assert.notEqual(card(s).dish.main,s.orders[0].dish.main);
+    assert.match(s.messages.at(-1).text,/查到样例订单/);
   });
   await check("忌口、未知成分和下架状态是硬边界",async()=>{
     const s=await start();
@@ -91,7 +111,7 @@ try {
     assert(affected); assert.equal(s.feedback.length,1);
     console.log("反馈实测 | "+affected.name+" "+affected.before+"→"+affected.after+"，分数 "+affected.delta);
   });
-  await check("下单幂等、推进日期后昨日主菜排除且临时偏好过期",async()=>{
+  await check("推进后昨日实单及同主菜从推荐和排名排除，隔天恢复",async()=>{
     const s=await send(await start(),"今天想吃辣，最好米饭");
     const orderDish=card(s).dish, action=args(s);
     await applyAction(s,local,"orders",action); await applyAction(s,local,"orders",action);
@@ -100,6 +120,12 @@ try {
     await applyAction(s,local,"demo/clock",{});
     assert.equal(s.day,moveDay(previous,1)); assert.equal(effective(s).flavor,"清淡");
     assert(!eligible(s,orderDish));
+    const yesterday=new Set(menu.filter(dish=>dish.main===orderDish.main).map(dish=>dish.id));
+    assert(s.ranking.ids.every(id=>!yesterday.has(id)));
+    await send(s,"想吃像昨天那种");
+    assert.notEqual(card(s)?.dish.main,orderDish.main);
+    await applyAction(s,local,"demo/clock",{});
+    assert(eligible(s,orderDish));
   });
   await check("快捷输入去重、清空和会话隔离",async()=>{
     const a=await send(await start(),"十八块以内"), b=await start();
@@ -195,7 +221,7 @@ try {
       modelPatch:{budget:null,staple:"无主食",avoid:["未知食材"],order:"fake"}
     });
     assert.equal(effective(session).budget,25);
-    assert.equal(effective(session).staple,"无主食");
+    assert.equal(effective(session).staple,"优先有主食");
     assert.deepEqual(effective(session).avoid,["花生","辣椒"]);
   });
   await check("托管环境接受请求配置且不会把 Key 转发到重定向地址",async()=>{
@@ -217,7 +243,7 @@ try {
     globalThis.fetch=async()=>new Response(null,{status:401});
     try {
       await assert.rejects(()=>ask(personalModels("sk-fixture-invalid"),"Return JSON",{}),
-        error=>connectionError(error).includes("没接受这把 Key"));
+        error=>connectionError(error).includes("未接受此 API Key"));
     } finally {globalThis.fetch=previous;}
   });
   await check("明确想吃辣时，历史偏好和模型输出都不能排出清淡菜",async()=>{
@@ -232,6 +258,54 @@ try {
     assert(card(s) && !card(s).dish.ingredients.includes("辣椒"));
     await send(s,"还是想吃辣的");
     assert.equal(card(s).dish.flavor,"香辣");
+  });
+  await check("改主意可重设口味、主食和预算，保留无关条件",async()=>{
+    const s=await send(await freshen(seed(),local),"想吃辣的面条，30元以内，不要香菜");
+    assert.equal(card(s).dish.staple,"面");
+    await send(s,"改主意了，还是不辣，改吃米饭吧，预算改成25元以内");
+    assert.equal(card(s).dish.staple,"米饭");
+    assert.notEqual(card(s).dish.flavor,"香辣");
+    assert(!card(s).dish.ingredients.includes("辣椒"));
+    assert.equal(effective(s).budget,25);
+    assert(effective(s).avoid.includes("香菜"));
+    await send(s,"可以吃香菜了");
+    assert.deepEqual(effective(s).avoid,["花生"]);
+    assert.equal(effective(s).budget,25);
+    assert.equal(card(s).dish.staple,"米饭");
+    assert.deepEqual(categoryPreference(s,"主食").avoid,[]);
+    await send(s,"不是米饭，而是面条，还是想吃辣的，预算不限");
+    assert.equal(card(s).dish.staple,"面");
+    assert.equal(card(s).dish.flavor,"香辣");
+    assert.equal(effective(s).budget,null);
+  });
+  await check("逐一换完所有合格菜，软偏好和反馈只改排名，昨日主菜全程排除",async()=>{
+    const s=await start();
+    const sameMain=s.orders.find(order=>eligible(s,order.dish));
+    assert(sameMain);
+    s.orders=[{...sameMain,sample:false,day:moveDay(s.day,-1)},...s.orders];
+    await send(s,"想吃主食，不限预算，最好是面条，尽量少油，少炸");
+    const expected=menu.filter(dish=>eligible(s,dish)).map(dish=>dish.id);
+    assert(expected.length>5);
+    assert(!expected.includes(sameMain.dish.id));
+    assert(menu.some(dish=>expected.includes(dish.id)&&dish.staple==="米饭"));
+    assert(menu.some(dish=>expected.includes(dish.id)&&!dish.lowOil));
+    const actual=[];
+    while(card(s) && actual.length<=expected.length) {
+      assert.equal(s.ranking.ids.length,10);
+      assert.equal(s.ranking.matchCount,Math.min(expected.length-actual.length,10));
+      assert.equal(s.ranking.ids[0],card(s).dish.id);
+      assert(s.ranking.ids.slice(0,s.ranking.matchCount).every(id=>expected.includes(id)&&!actual.includes(id)));
+      assert(s.ranking.ids.every(id=>menu.find(d=>d.id===id).main!==sameMain.dish.main));
+      actual.push(card(s).dish.id);
+      const previous=args(s);
+      await applyAction(s,local,"recommendations/next",previous);
+      if (actual.length===1) await applyAction(s,local,"feedback",{...previous,reason:"今天不想吃这个口味"});
+    }
+    assert.deepEqual(actual.slice().sort(),expected.slice().sort());
+    assert.equal(s.ranking.ids.length,10);
+    assert.equal(s.ranking.matchCount,0);
+    assert.match(s.messages.at(-1).text,new RegExp("本轮|这轮符合条件的 "+expected.length+" 道菜都看过了"));
+    console.log("换菜穷尽 | "+actual.length+" 道，全部可达");
   });
   await check("甜点、零食、蔬菜、水果均可按品类和约束推荐",async()=>{
     const s=await start();
@@ -315,6 +389,8 @@ try {
     const orders=s.orders;
     await freshen(s,local);
     assert.deepEqual(s.today,{});
+    assert.equal(s.batch,null);
+    await send(s,"想吃主食");
     assert.equal(card(s).dish.category,"主食");
     assert.equal(effective(s).flavor,"鲜香");
     assert.equal(s.orders,orders);
@@ -341,15 +417,73 @@ try {
       assert.equal(card(s).mode.reason,"事实模板");
     } finally {globalThis.fetch=original;}
   });
+  await check("开场无消息即有十道排名，筛选后匹配菜优先且数量固定",async()=>{
+    const s=await freshen(seed(),local);
+    assert.deepEqual(s.messages,[]);
+    assert.equal(s.batch,null);
+    assert.equal(s.ranking.ids.length,10);
+    assert.equal(new Set(s.ranking.ids).size,10);
+    const initial=s.ranking.ids;
+    const differentPreference=seed();
+    differentPreference.profile.flavor="香辣";
+    await freshen(differentPreference,local);
+    assert.notDeepEqual(differentPreference.ranking.ids,initial);
+    const noHistory=seed();
+    noHistory.orders=[];
+    await freshen(noHistory,local);
+    assert.notDeepEqual(noHistory.ranking.ids,initial);
+    await send(s,"想吃水果，12 元以内");
+    const matches=menu.filter(dish=>eligible(s,dish));
+    assert(matches.length>0&&matches.length<10);
+    assert.equal(s.ranking.ids.length,10);
+    assert.equal(s.ranking.matchCount,matches.length);
+    assert.deepEqual(new Set(s.ranking.ids.slice(0,s.ranking.matchCount)),new Set(matches.map(dish=>dish.id)));
+    assert.equal(s.ranking.ids[0],card(s).dish.id);
+    await send(s,"想吃主食，1 元以内");
+    assert.equal(card(s),null);
+    assert.equal(s.ranking.ids.length,10);
+    assert.equal(s.ranking.matchCount,0);
+  });
+  await check("已保存的旧会话补齐排名，未触发新推荐",async()=>{
+    const s=await send(await start(),"想吃水果");
+    const current=card(s).dish.id;
+    const count=s.messages.length;
+    delete s.ranking;
+    await freshen(s,local);
+    assert.equal(s.ranking.ids[0],current);
+    assert.equal(s.ranking.ids.length,10);
+    assert.equal(s.messages.length,count);
+  });
+  await check("选择模型时切换文本和语音接口，OpenAI 兼容请求不携带推理参数",async()=>{
+    const original=globalThis.fetch;
+    try {
+      assert.equal(personalModels("fixture","qwen-flash").speech,"qwen3-asr-flash");
+      const model=personalModels("fixture","gpt-4.1-mini");
+      globalThis.fetch=async (url,options)=>{
+        assert.equal(options.headers.get("Authorization"),"Bearer fixture");
+        if(String(url).endsWith("/audio/transcriptions")) {
+          assert.equal(options.body.get("model"),"gpt-4o-mini-transcribe");
+          return Response.json({text:"想吃米饭"});
+        }
+        assert.equal(String(url),"https://api.openai.com/v1/chat/completions");
+        const body=JSON.parse(options.body);
+        assert.equal(body.model,"gpt-4.1-mini");
+        assert.equal("reasoning_effort" in body,false);
+        return Response.json({choices:[{message:{content:'{"ok":true}'}}]});
+      };
+      assert.equal((await ask(model,"Return JSON",{})).ok,true);
+      assert.equal(await transcribe(model,new File(["fixture"],"speech.wav")),"想吃米饭");
+    } finally {globalThis.fetch=original;}
+  });
   await check("完整 Key 和常见粘贴包装通过，脱敏值及 AccessKey ID 被拒绝",async()=>{
     const key="sk-fixture-key_123";
-    assert.equal(normalizeBailianKey(key),key);
-    assert.equal(normalizeBailianKey("   "+key+"\n"),key);
-    assert.equal(normalizeBailianKey("Authorization: Bearer "+key),key);
-    assert.equal(normalizeBailianKey('export DASHSCOPE_API_KEY="'+key+'"\n'),key);
-    assert.equal(normalizeBailianKey("API Key：“sk-fix\u200Bture-key_123”"),key);
-    assert.equal(normalizeBailianKey("sk-"+ "a".repeat(250)),"sk-"+ "a".repeat(250));
-    for(const bad of ["sk-****1234","sk-abc...def","sk-abc…def","LTAI-fake-id",key+" extra",""])assert.equal(normalizeBailianKey(bad),null);
+    assert.equal(normalizeApiKey(key),key);
+    assert.equal(normalizeApiKey("   "+key+"\n"),key);
+    assert.equal(normalizeApiKey("Authorization: Bearer "+key),key);
+    assert.equal(normalizeApiKey('export DASHSCOPE_API_KEY="'+key+'"\n'),key);
+    assert.equal(normalizeApiKey("API Key：“sk-fix\u200Bture-key_123”"),key);
+    assert.equal(normalizeApiKey("sk-"+ "a".repeat(250)),"sk-"+ "a".repeat(250));
+    for(const bad of ["sk-****1234","sk-abc...def","sk-abc…def","LTAI-fake-id",key+" extra",""])assert.equal(normalizeApiKey(bad),null);
   });
   console.log(`完成 | ${passed} 个固定场景`);
 } finally {rmSync(target,{recursive:true,force:true});}

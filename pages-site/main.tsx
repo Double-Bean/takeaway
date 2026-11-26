@@ -46,7 +46,7 @@ function storedToken() {
 async function remote(path:string,options:RequestInit={}) {
   const headers=new Headers(options.headers);
   if (token) headers.set(sessionHeader,token);
-  return fetch(backend+path,{...options,headers,credentials:"omit"});
+  return fetch(backend+path+"?daily=manual",{...options,headers,credentials:"omit"});
 }
 
 async function sessionResponse(response:Response) {

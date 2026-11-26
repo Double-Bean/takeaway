@@ -84,27 +84,34 @@ function amount(value:string) {
 }
 
 export function ruleIntent(text:string,session:Session) {
-  const query=text.normalize("NFKC").replace(/\s+/g,"");
+  const raw=text.normalize("NFKC").replace(/\s+/g,"");
+  const revising=/改主意|反悔|还是|改吃|改喝|改要|改成|改到|换成|不是.+而是|可以.+了|也可以|不限了|不用再|取消.*限制/.test(raw);
+  const query=raw.replace(/不是[^，。；]+[，,]?而是/g,"")
+    .replace(/(?:不吃|不想吃|不要吃?)[^，。；]+?了[，,]?(?=改吃|改成|换成|还是)/g,"");
   let patch:Partial<Pref>={};
   const selection:Selection={};
   let question="";
   let historical="";
 
-  const price=query.match(/(?:预算(?:是|为)?|¥|不到|低于|少于|不超过|最多)?(\d+(?:\.\d+)?|[零〇一二两三四五六七八九十]{1,3})(?:块钱|块|元|以内|左右|以下|封顶)/);
-  const manualPrice=query.match(/预算(?:是|为)?(\d+(?:\.\d+)?|[一二两三四五六七八九十]{1,3})$/);
+  const prices=[...query.matchAll(/(?:预算(?:是|为)?|¥|不到|低于|少于|不超过|最多)?(\d+(?:\.\d+)?|[零〇一二两三四五六七八九十]{1,3})(?:块钱|块|元|以内|左右|以下|封顶)/g)];
+  const price=prices.at(-1);
+  const manualPrice=query.match(/预算(?:是|为|改成|改到|调到|调整到|放宽到|提高到)?(\d+(?:\.\d+)?|[一二两三四五六七八九十]{1,3})(?:[。！!]?$)/);
   if (price||manualPrice) {
     const hit=(price??manualPrice)!;
     const parsed=amount(hit[1]);
-    if (parsed>=1&&parsed<=300) patch = /左右|上下|差不多/.test(query) ? {target:parsed,budget:null} : {budget:parsed,target:null};
+    const after=query.slice(hit.index!+hit[0].length);
+    if (parsed>=1&&parsed<=300) patch = /左右|上下|差不多/.test(hit[0]) || /^(左右|上下|差不多)/.test(after) ? {target:parsed,budget:null} : {budget:parsed,target:null};
     else question="预算想设在多少元？可以直接回复金额。";
   }
-  if (/不限(制)?预算|预算不限|不设预算/.test(query)) Object.assign(patch,{budget:null,target:null});
+  if (/不限(制)?预算|预算不限|不设预算|取消预算限制/.test(query)) Object.assign(patch,{budget:null,target:null});
+  const flavorClauses=query.split(/[，。；、！？]/);
+  const softFlavor=flavorClauses.some(clause=>/^(?:最好|优先|尽量|偏向)(?:吃|来点)?(?:清淡|清爽|香辣|麻辣|辣|鲜香|酸甜|甜味)/.test(clause));
   const noSpice=/不辣|别太辣|不(?:要|想|能)?吃(?:太|很)?辣|(?:不要|别放|不加)辣/.test(query);
   if (noSpice) {
     selection.noSpice=true;
     selection.flavor=undefined;
     patch.flavor="清淡";
-  } else if (/想吃.{0,3}辣|(?:要|来点|来个|来份)辣|香辣|吃辣|辣一点|麻辣|川味/.test(query)) {
+  } else if (/想吃.{0,3}辣|(?:改吃|改成|换成|还是)辣|(?:要|来点|来个|来份)辣|香辣|吃辣|辣一点|麻辣|川味/.test(query)) {
     patch.flavor="香辣";
     selection.flavor="香辣";
     selection.noSpice=undefined;
@@ -112,7 +119,8 @@ export function ruleIntent(text:string,session:Session) {
   else if (/清爽|清淡|轻一点|不重口/.test(query)) patch.flavor=selection.flavor="清淡";
   else if (/酸甜|酸一点|番茄味/.test(query)) patch.flavor=selection.flavor="酸甜";
   else if (/吃点甜|想吃甜的|甜一点/.test(query)) patch.flavor=selection.flavor="甜味";
-  if (/口味不限|什么口味都行/.test(query)) {
+  if (softFlavor && !noSpice) selection.flavor=undefined;
+  if (/口味不限|什么口味都行|取消口味限制/.test(query)) {
     patch.flavor="不限";
     selection.flavor=undefined;
     selection.noSpice=undefined;
@@ -123,34 +131,56 @@ export function ruleIntent(text:string,session:Session) {
   } else if (/米饭|配饭/.test(query) && !/不要米饭|不吃米饭/.test(query)) patch.staple="优先米饭";
   else if (/有主食|带主食/.test(query)) patch.staple="优先有主食";
   const mainFood=query.replace(/(?:不要|不吃|不想吃|不加|别推荐)(?:吃)?(?:面条|汤面|米线|面食|炒面|拌面|米饭|杂粮|面)/g,"");
-  if (/(?:必须|一定要|只吃|就要)(?:吃|有|带)?(?:米饭|配饭)/.test(mainFood)) selection.staple="米饭";
+  if (/(?:必须|一定要|只吃|就要|改吃|改成|换成|还是要)(?:吃|有|带)?(?:米饭|盖饭|配饭)/.test(mainFood)) selection.staple="米饭";
   else if (/面条|汤面|米线|面食|炒面|拌面|来碗面|(?:吃|的|一碗)面(?:$|[，。！？])/.test(mainFood)) {
-    selection.staple="面";
+    if (/(?:最好|优先|偏向|尽量)[^，。；]{0,6}(?:面条|汤面|米线|面食|炒面|拌面)/.test(mainFood)) {
+      selection.staple=undefined;
+      selection.preferredStaple="面";
+    } else selection.staple="面";
     patch.staple="不限";
   } else if (/(?:想吃|要吃|只吃|来[碗份])(?:点|个)?杂粮/.test(mainFood)) selection.staple="杂粮";
-  if (/少油|不油腻/.test(query)) patch.lowOil=selection.lowOil=true;
-  if (/少炸|不吃炸|不要油炸|非油炸/.test(query)) patch.noFry=selection.noFry=true;
+  if (/少油|不油腻/.test(query)) {
+    patch.lowOil=true;
+    selection.lowOil=/(?:优先|最好|尽量)[^，。；]{0,6}(?:少油|不油腻)/.test(query)?undefined:true;
+  }
+  if (/少炸|优先非油炸|最好非油炸/.test(query)) {
+    patch.noFry=true;
+    selection.noFry=undefined;
+  } else if (/不吃炸|不要油炸|非油炸/.test(query)) patch.noFry=selection.noFry=true;
+  if (/不用(?:再)?少油|油多一点也可以|取消少油限制/.test(query)) {patch.lowOil=false;selection.lowOil=undefined;}
+  if (/油炸也可以|也可以吃炸|不用避开油炸|取消非油炸限制/.test(query)) {patch.noFry=false;selection.noFry=undefined;}
   if (/吃素|素食|不要肉|不吃肉|不要荤|不吃荤/.test(query)) selection.meatless=true;
+  if (/可以吃肉|肉也可以|不用吃素/.test(query)) selection.meatless=undefined;
+  if (selection.meatless) selection.ingredient=undefined;
+  if (/主食不限|主食随意|取消主食限制/.test(query)) {
+    patch.staple="不限";selection.staple=undefined;selection.preferredStaple=undefined;
+  }
   const requestedCategory=query.replace(/(?:不要|不吃|不想吃|别推荐|别加)(?:吃)?(?:主食|甜点|甜品|零食|小吃|蔬菜|水果|米饭)/g,"");
   if (/甜点|甜品|布丁|蛋挞/.test(requestedCategory)) selection.category="甜点";
   else if (/零食|小吃|解馋/.test(requestedCategory)) selection.category="零食";
   else if (/水果|果盘|鲜切|果切/.test(requestedCategory)) selection.category="水果";
   else if (/蔬菜|素菜|配菜/.test(requestedCategory)) selection.category="蔬菜";
-  else if (/午[饭餐]|主食|盖饭|吃正餐|米饭/.test(requestedCategory) || (selection.staple&&selection.staple!=="无")) selection.category="主食";
+  else if (/午[饭餐]|主食|盖饭|吃正餐|米饭/.test(requestedCategory) || (selection.staple&&selection.staple!=="无") || selection.preferredStaple) selection.category="主食";
   const positiveIngredient=requestedCategory
       .split(/[，。；、！？]/)
       .filter(clause=>!/(?:不想吃|不能吃|不要|不吃|不加|别放|过敏|忌口)/.test(clause))
-      .map(clause=>[...foods].sort((a,b)=>b.length-a.length).find(food=>clause.includes(food)&&(clause.includes("想吃")||clause.includes("来份")||clause.includes("要有"))))
+      .map(clause=>[...foods].sort((a,b)=>b.length-a.length).find(food=>clause.includes(food)&&(clause.includes("想吃")||clause.includes("来份")||clause.includes("要有")||/改吃|改成|换成|还是要/.test(clause))))
       .find(Boolean);
   if (positiveIngredient) {
     selection.ingredient=positiveIngredient;
     if (!selection.category && ["芒果","草莓","香蕉","苹果","菠萝","西瓜","橙子","蓝莓","奇异果","牛油果","葡萄"].includes(positiveIngredient)) selection.category="水果";
   }
-  const negativeStart=query.search(/不要|不吃|不想吃|别放|别加|去掉|忌口|不加/);
+  const negativeStart=query.search(/不要|不吃|不能吃|不想吃|别放|别加|去掉|忌口|不加|过敏/);
   if (negativeStart>=0) {
-    const avoid=foods.filter(food=>new RegExp(`(?:不要|不吃|不想吃|别放|别加|去掉|忌口|不加)(?:吃|放|加)?${food}|(?:不要|不吃|不想吃)[^，。；、]{0,6}[、和及跟]${food}`).test(query));
+    const avoid=foods.filter(food=>new RegExp(`(?:不要|不吃|不能吃|不想吃|别放|别加|去掉|忌口(?:是)?|不加)(?:吃|放|加)?${food}|(?:不要|不吃|不能吃|不想吃)[^，。；、]{0,6}[、和及跟]${food}`).test(query) || query.includes(food+"过敏"));
     if (avoid.length) patch.avoid=avoid;
   }
+  const restoreAvoid=foods.filter(food=>new RegExp(
+    "(?:可以(?:吃|放|加)|能吃)"+food+"(?:了|也行|[，。；]|$)|"+food+"(?:可以(?:吃|放|加)|也可以|不用避开)"
+  ).test(query));
+  if (revising && !positiveIngredient && /不(?:想)?吃|不要|去掉/.test(query) &&
+    session.selection?.ingredient && patch.avoid?.includes(session.selection.ingredient)) selection.ingredient=undefined;
+  if (patch.avoid) patch.avoid=patch.avoid.filter(food=>!restoreAvoid.includes(food));
   const isHistorical=/昨天.{0,5}(那|类似)|上次.{0,5}(那|类似)|之前.{0,8}(一样|那种|套餐)/.test(query);
   if (isHistorical) {
     const yesterday=moveDay(session.day,-1);
@@ -164,7 +194,9 @@ export function ruleIntent(text:string,session:Session) {
   }
   const changesStaple=Boolean(selection.staple && session.selection?.staple &&
     selection.staple!==session.selection.staple);
-  const newRequest=isHistorical || changesStaple || startsRequest(query,session,selection.category);
+  const contextCategory=session.pending?.selection?.category??activeCategory(session);
+  const newRequest=isHistorical || (selection.category!==undefined&&selection.category!==contextCategory) ||
+    (!revising&&(changesStaple||startsRequest(query,session,selection.category)));
   const category=selection.category??(newRequest?"主食":session.pending?.selection?.category??activeCategory(session));
   const ongoing=effective(session,category,newRequest?{}:session.today);
   if (/再便宜|更便宜|便宜点|便宜一点|便宜些/.test(query) && !price && !manualPrice) {
@@ -173,19 +205,21 @@ export function ruleIntent(text:string,session:Session) {
     else question="这顿想控制在多少元以内？";
   }
   const exclusion=effective(session,category,{}).avoid;
-  const conflict=exclusion.find(food=>selection.ingredient===food ||
-    new RegExp(`(?:可以吃|想吃|能吃)${food}`).test(query.replace(/不(?:可以吃|想吃|能吃)/g,"")));
+  const conflict=exclusion.find(food=>selection.ingredient===food || restoreAvoid.includes(food) ||
+    query.split(/[，。；、！？]/).some(clause=>!/(?:不可以|不能|不想|不要)/.test(clause) &&
+      new RegExp("(?:可以吃|想吃|能吃)"+food).test(clause)));
   const longTerm=/以后|长期|今后|从今往后|一直不吃/.test(query);
   const unknownAvoid = !patch.avoid?.length && /(?:别放|不加|忌口是|不吃)[\p{Script=Han}]{1,10}/u.exec(query);
   if (unknownAvoid && !/不吃(?:炸|主食|米饭|油炸|肉|荤|辣)/.test(query)) question ||= "这项忌口没有匹配菜单食材标签。请在「我的偏好」确认食材后再推荐。";
-  return {patch,selection,category,newRequest,question,conflict,historical,longTerm};
+  if (/^(?:我)?(?:改主意了|反悔了?|算了)[。！!？?]*$/.test(raw)) question="想改哪一项？可以直接告诉我新的口味、主食或预算。";
+  return {patch,selection,category,newRequest,question,conflict,historical,longTerm,restoreAvoid,meaning:query};
 }
 
 export function requestInterpretation(text:string,session:Session,context:Models) {
   const rule=ruleIntent(text,session);
   return ask(context,
       "你是中文午餐请求解析器。输出 JSON 对象 {patch,question,longTerm}。仅提取明确表达的变更，不臆断。patch可含 budget(硬预算数或null),target(约价),flavor(清淡/鲜香/香辣/酸甜/甜味/不限),staple(不限/优先米饭/优先有主食/无主食),avoid(仅从给定食材中选),lowOil(bool),noFry(bool)。只返回本句明确新增或修改的字段。省略历史条件和默认条件。涉及忌口不能移除既有记录。不明确且会影响推荐才写一句question。longTerm仅用户明确要求长期保存才为true。",
-      {text,category:rule.category,price:rule.newRequest?undefined:session.batch?.card?.dish.price,allowedIngredients:foods,pending:rule.newRequest?undefined:session.pending?.question});
+      {text:rule.meaning,category:rule.category,price:rule.newRequest?undefined:session.batch?.card?.dish.price,allowedIngredients:foods,pending:rule.newRequest?undefined:session.pending?.question});
 }
 
 export async function interpret(text:string,session:Session,context:Models,clientProposal:unknown) {
@@ -196,16 +230,16 @@ export async function interpret(text:string,session:Session,context:Models,clien
       ? await requestInterpretation(text,session,context)
       : {patch:clientProposal,question:undefined};
     const proposal=validPatch(result.patch);
-    // Exclusions must be present in this utterance, not copied from prior context.
-    if (proposal.avoid) proposal.avoid=proposal.avoid.filter(food=>text.includes(food) &&
-      /不要|不吃|不能吃|不想吃|别放|别加|不加|忌口|过敏/.test(text));
+    // Model-only preferences can refine ranking, while explicit rules control eligibility.
+    if (!("budget" in rule.patch)) delete proposal.budget;
+    if (!("avoid" in rule.patch)) delete proposal.avoid;
+    if (!/主食|米饭|配饭|面条|杂粮/.test(rule.meaning)) delete proposal.staple;
+    if (!/便宜|价格|预算|元|块/.test(rule.meaning)) delete proposal.target;
     const patch={...proposal,...rule.patch};
-    if (proposal.avoid || rule.patch.avoid) patch.avoid=[...new Set([...(proposal.avoid??[]),...(rule.patch.avoid??[])])];
     const question=typeof result.question==="string" ? result.question.slice(0,120).trim() : "";
-    const selection={...rule.selection};
-    if (!("flavor" in selection) && patch.flavor && !rule.historical) {
-      selection.flavor=patch.flavor==="不限"?undefined:patch.flavor;
-      if (patch.flavor==="香辣") selection.noSpice=undefined;
+    const selection=rule.selection;
+    if (patch.flavor==="香辣" && !("noSpice" in selection) && /辣/.test(rule.meaning)) {
+      selection.noSpice=undefined;
     }
     return {...rule,selection,patch,question:rule.question || (Object.keys(patch).length ? "" : question),longTerm:rule.longTerm,mode:"模型解析"};
   } catch {
@@ -213,10 +247,17 @@ export async function interpret(text:string,session:Session,context:Models,clien
   }
 }
 
-export function eligible(session:Session,dish:Dish) {
-  const p=effective(session);
+function yesterdayMains(session:Session) {
   const yesterday=moveDay(session.day,-1);
-  const sameMain=session.orders.some(o=>o.day===yesterday && o.dish.main===dish.main);
+  return new Set(session.orders.filter(order=>order.day===yesterday).map(order=>order.dish.main));
+}
+
+function inService(dish:Dish,blockedMains:Set<string>) {
+  return dish.available && dish.deliverable && !blockedMains.has(dish.main);
+}
+
+export function eligible(session:Session,dish:Dish,blockedMains=yesterdayMains(session)) {
+  const p=effective(session);
   const selection=session.selection??{};
   const category=activeCategory(session);
   const meat=["牛肉","猪肉","鸡肉","羊肉","鸭肉","鱼","虾","贝类","鱿鱼"];
@@ -227,7 +268,7 @@ export function eligible(session:Session,dish:Dish) {
     && (!selection.lowOil || dish.lowOil)
     && (!selection.noFry || dish.method!=="油炸")
     && (!selection.meatless || !dish.ingredients.includes("?") && !dish.ingredients.some(food=>meat.includes(food)))
-    && dish.available && dish.deliverable && !sameMain && (p.budget===null || dish.price<=p.budget)
+    && inService(dish,blockedMains) && (p.budget===null || dish.price<=p.budget)
     && (!p.avoid.length || !dish.ingredients.includes("?") && !dish.ingredients.some(food=>p.avoid.includes(food)));
 }
 
@@ -252,11 +293,12 @@ function feedbackScore(events:Feedback[],dish:Dish,day:string) {
 }
 
 type Ranking = {scores:Score[]; orders:Card["orders"]; menuMode:string; orderMode:string; excluded:number};
-async function rank(session:Session, query:string, context:Models):Promise<Ranking> {
+async function rank(session:Session, query:string, context:Models, fullMenu=false):Promise<Ranking> {
   const p=effective(session);
-  const options=menu.filter(d=>eligible(session,d));
+  const blockedMains=yesterdayMains(session);
+  const options=menu.filter(dish=>fullMenu?inService(dish,blockedMains):eligible(session,dish,blockedMains));
   const history=session.orders.filter(o=>o.dish.category===activeCategory(session)&&o.day>=moveDay(session.day,-30)&&o.day<=session.day);
-  const queryText=[query, activeCategory(session), session.selection?.staple, p.flavor==="不限"?"":p.flavor,p.staple,p.lowOil?"少油":"",p.noFry?"清蒸 炖煮":""].filter(Boolean).join(" ");
+  const queryText=[query, activeCategory(session), session.selection?.staple??session.selection?.preferredStaple, p.flavor==="不限"?"":p.flavor,p.staple,p.lowOil?"少油":"",p.noFry?"清蒸 炖煮":""].filter(Boolean).join(" ");
   const docs=[queryText,...options.map(document),...history.map(o=>document(o.dish))];
   let vectors=docs.map(localVector);
   let mode="关键词 + 本地标签向量";
@@ -270,7 +312,7 @@ async function rank(session:Session, query:string, context:Models):Promise<Ranki
   const scores=options.map((dish,i)=>{
     const preference=[
       p.flavor==="不限"?0.5:Number(dish.flavor===p.flavor),
-      p.staple==="不限"?0.5:Number(p.staple==="优先米饭"?dish.staple==="米饭":p.staple==="无主食"?dish.staple==="无":dish.staple!=="无"),
+      session.selection?.preferredStaple?Number(dish.staple===session.selection.preferredStaple):p.staple==="不限"?0.5:Number(p.staple==="优先米饭"?dish.staple==="米饭":p.staple==="无主食"?dish.staple==="无":dish.staple!=="无"),
       p.lowOil?Number(dish.lowOil):0.5,p.noFry?Number(dish.method!=="油炸"):0.5,
       p.target ? Math.max(0,1-Math.abs(p.target-dish.price)/p.target) : 0.5
     ];
@@ -283,9 +325,39 @@ async function rank(session:Session, query:string, context:Models):Promise<Ranki
     menuMode:mode,orderMode:mode,excluded:menu.length-options.length};
 }
 
+const rankingLimit=10;
+
+async function setRanking(session:Session,context:Models,query:string,matches:string[],seen:string[]) {
+  const leading=matches.slice(0,rankingLimit);
+  const ids=[...leading];
+  if (ids.length<rankingLimit) {
+    const other=await rank(session,query,{...context,key:""},true);
+    const excluded=new Set([...leading,...seen]);
+    ids.push(...other.scores.filter(score=>!excluded.has(score.id)).slice(0,rankingLimit-ids.length).map(score=>score.id));
+  }
+  session.ranking={ids,matchCount:leading.length};
+}
+
+export async function refreshRanking(session:Session,context:Models) {
+  const batch=session.batch;
+  const query=batch?.query??"";
+  const ranking=await rank(session,query,{...context,key:""});
+  const seen=batch?.seen??[];
+  const matches=ranking.scores.filter(score=>!seen.includes(score.id)).map(score=>score.id);
+  const current=batch?.card?.dish.id;
+  if (current && matches.includes(current)) {
+    matches.splice(matches.indexOf(current),1);
+    matches.unshift(current);
+  } else if (batch?.card && yesterdayMains(session).has(batch.card.dish.main)) {
+    batch.card=null;
+  }
+  await setRanking(session,context,query,matches,seen);
+}
+
 export async function choose(session:Session,context:Models,query="",seen:string[]=[],intentMode="预设偏好",batchId:string=uuid()) {
   const ranking=await rank(session,query,context);
-  const dish=ranking.scores.map(s=>menu.find(d=>d.id===s.id)!).find(d=>!seen.includes(d.id));
+  const ordered=ranking.scores.filter(score=>!seen.includes(score.id)).map(score=>score.id);
+  const dish=menu.find(candidate=>candidate.id===ordered[0]);
   const conditions=effective(session);
   let card:Card|null=null;
   if (dish) {
@@ -315,6 +387,7 @@ export async function choose(session:Session,context:Models,query="",seen:string
       mode:{intent:intentMode,menu:ranking.menuMode,orders:ranking.orderMode,reason:reasonMode},excluded:ranking.excluded};
   }
   session.batch={id:batchId,query,seen,card};
+  await setRanking(session,context,query,ordered,seen);
   return card;
 }
 
