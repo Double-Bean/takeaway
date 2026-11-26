@@ -15,7 +15,10 @@
     "db:local": "wrangler d1 migrations apply DB --config wrangler.jsonc --local --persist-to .wrangler/state",
     "deploy": "node scripts/deploy-cloudflare.mjs",
     "test": "node scripts/check-lunch.mjs",
-    "build:pages": "vite build --config vite.pages.config.ts"
+    "build:pages": "vite build --config vite.pages.config.ts",
+    "build:scf": "npm --prefix scf run build",
+    "package:scf": "npm --prefix scf run package",
+    "test:scf": "npm --prefix scf test"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

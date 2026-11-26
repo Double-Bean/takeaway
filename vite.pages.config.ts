@@ -9,7 +9,7 @@ export default defineConfig(({mode})=>{
   if (origin) {
     const url=new URL(origin);
     if (url.protocol!=="https:" || url.username || url.password || url.pathname!=="/" || url.search || url.hash) {
-      throw new Error("VITE_LUNCH_API_ORIGIN must be the Worker's HTTPS origin without a path.");
+      throw new Error("VITE_LUNCH_API_ORIGIN must be the API's HTTPS origin without a path.");
     }
     apiBase=new URL("/api/",url).href;
   }

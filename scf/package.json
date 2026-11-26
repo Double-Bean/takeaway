@@ -1,0 +1,16 @@
+{
+  "name": "takeaway-scf",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "esbuild server.ts --bundle --platform=node --target=node20 --format=cjs --outfile=../dist/scf/server.cjs",
+    "package": "npm run build && cp scf_bootstrap schema.sql ../dist/scf/ && cd ../dist/scf && zip -q -FS ../takeaway-scf.zip scf_bootstrap server.cjs schema.sql",
+    "test": "esbuild ../scripts/check-scf.ts --bundle --platform=node --target=node20 --format=cjs --outfile=../dist/scf/check.cjs && node --test ../dist/scf/check.cjs"
+  },
+  "dependencies": {
+    "mysql2": "3.24.6"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.0"
+  }
+}

@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")"
+if [ -x /var/lang/node20/bin/node ]; then
+  exec /var/lang/node20/bin/node server.cjs
+fi
+exec node server.cjs
