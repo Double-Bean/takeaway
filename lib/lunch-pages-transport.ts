@@ -33,6 +33,7 @@ async function sessionResponse(response:Response) {
 }
 
 export function createPagesTransport(backend:string|undefined,fetcher:typeof fetch=fetch,storage=()=>localStorage) {
+  const sameOrigin=backend?.startsWith("/")&&!backend.startsWith("//");
   const localModel=models({});
   let token:string|null=null;
   let usingBackend=false;
@@ -61,17 +62,19 @@ export function createPagesTransport(backend:string|undefined,fetcher:typeof fet
   function remote(path:string,options:RequestInit={}) {
     const headers=new Headers(options.headers);
     if (token) headers.set(sessionHeader,token);
-    return fetcher(backend+path+"?daily=manual",{...options,headers,credentials:"omit"});
+    return fetcher(backend+path+"?daily=manual",{...options,headers,credentials:sameOrigin?"same-origin":"omit"});
   }
 
   async function connect() {
-    token=token??readStorage(remoteKey);
+    if(!sameOrigin) token=token??readStorage(remoteKey);
     const response=await remote("session",{signal:timeoutSignal(12000)});
     const data=await sessionResponse(response);
-    const id=response.headers.get(sessionHeader);
-    if (!id) throw new CloudError("云端会话尚未建立。",502);
-    token=id;
-    writeStorage(remoteKey,id);
+    if(!sameOrigin) {
+      const id=response.headers.get(sessionHeader);
+      if (!id) throw new CloudError("云端会话尚未建立。",502);
+      token=id;
+      writeStorage(remoteKey,id);
+    }
     usingBackend=true;
     return data;
   }

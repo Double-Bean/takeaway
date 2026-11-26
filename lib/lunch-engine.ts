@@ -152,7 +152,7 @@ export function ruleIntent(text:string,session:Session) {
     selection.noSpice=true;
     selection.flavor=undefined;
     patch.flavor="清淡";
-  } else if (/想吃.{0,3}辣|(?:改吃|改成|换成|还是)辣|(?:要|来点|来个|来份)辣|香辣|吃辣|辣一点|麻辣|川味/.test(query)) {
+  } else if (/想吃.{0,3}辣|(?:改吃|改成|换成|还是)辣|(?:要|来点|来个|来份)辣|香辣|吃辣|辣一点|辣(?:的)?(?:面(?:条)?|拌面|汤面|米线)|麻辣|川味/.test(query)) {
     patch.flavor="香辣";
     selection.flavor="香辣";
     selection.noSpice=undefined;
