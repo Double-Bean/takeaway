@@ -25,3 +25,7 @@ npm start
 4. 首次部署使用新的 D1 数据库。ChatGPT Sites 上已有的访客 Cookie、偏好和订单属于原站点。
 
 也可在具有 Cloudflare 授权的终端中设置 `TAKEAWAY_D1_ID` 后运行 `npm run build` 和 `npm run deploy`。可用 `npx wrangler secret put LUNCH_DEFAULT_BAILIAN_KEY --config dist/server/wrangler.json` 安全设置运行时密钥。
+
+## GitHub Pages
+
+执行 `npm run build:pages` 生成 `dist/pages`。将产物发布到 `gh-pages` 分支根目录，并保留 `.nojekyll`。公开访客可免登录使用。推荐、偏好、反馈和模拟订单由浏览器处理并保存在当前浏览器。语音识别取决于浏览器支持；如需要百炼，可在页面中配置访客自己的 Key。
