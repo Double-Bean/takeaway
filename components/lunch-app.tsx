@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { Check, ChefHat, Menu as MenuIcon, ChevronDown, ChevronRight, Clock3, Flame, History, KeyRound, Leaf, Mic, RefreshCw, Send, Settings2, Sparkles, Square, Wallet, X } from "lucide-react";
+import { Check, ChefHat, Menu as MenuIcon, ChevronDown, ChevronRight, Clock3, History, KeyRound, Mic, RefreshCw, Send, Settings2, Shuffle, Sparkles, Square, X } from "lucide-react";
 import { categories, dishById, feedbackReasons, flavors, foods, menu, staples, type Category, type Dish } from "@/lib/lunch-data";
 import type { Card, Pref, Session } from "@/lib/lunch-types";
 import type { PersonalModelId } from "@/lib/lunch-byok";
@@ -9,6 +9,7 @@ import { LunchApiSettings } from "@/components/lunch-api-settings";
 import { isLegacyDailyPreview } from "@/lib/lunch-actions";
 import { toSpeechWav } from "@/lib/lunch-audio";
 import { activeCategory, categoryPreference, effective, recommendationFactMode, requestInterpretation, stapleExclusionsLabel, uuid } from "@/lib/lunch-engine";
+import { trackLunchViewport } from "@/lib/lunch-viewport";
 import { timeoutSignal } from "@/lib/lunch-network";
 import { ask, connectionError, personalModels, transcribe, type Models } from "@/lib/lunch-models";
 
@@ -152,12 +153,22 @@ function DishCard({card,active,onOrder,onNext,onEvidence,busy}:{card:Card;active
   </article>;
 }
 
-const suggestions=[
-  {label:"清爽少油",text:"今天想吃清爽少油一点，最好有米饭",icon:Leaf,tone:"green"},
-  {label:"25 元以内",text:"今天午饭想控制在 25 元以内",icon:Wallet,tone:"gold"},
-  {label:"香辣配饭",text:"今天想吃辣，最好有米饭",icon:Flame,tone:"red"},
-  {label:"参考上一餐",text:"想吃像上次那种，帮我换一道",icon:History,tone:"blue"},
+const examplePrompts=[
+  "我想吃汉堡",
+  "我想吃好一碗这家店",
+  "我想最快送达",
+  "我不想吃杂粮饭和米饭",
+  "想吃 25 元以内的辣面",
+  "想吃像上次那种，帮我换一道",
+  "三个人吃，30 分钟内送达",
+  "我想吃 15 元以内的水果",
+  "今天想吃清淡点，不加香菜",
 ];
+
+function sampleExamples(previous:readonly string[]) {
+  const pool=examplePrompts.filter(prompt=>!previous.includes(prompt));
+  return Array.from({length:3},()=>pool.splice(Math.floor(Math.random()*pool.length),1)[0]);
+}
 
 const names:Record<Panel,string>={api:"API 设置",profile:"我的偏好",today:"本轮条件",orders:"午饭订单",evidence:"为什么推荐这道",compare:"本轮排序",confirm:"确认模拟下单",microphone:"用语音说说今天想吃什么",menu:"查看模拟菜单"};
 export type LunchTransport = {
@@ -172,7 +183,8 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
   const [activeModel,setActiveModel]=useState<PersonalModelId|null>(null);
   const [speechFallback,setSpeechFallback]=useState(false);
   const [welcome,setWelcome]=useState(true);
-  const shell=useRef<HTMLDivElement>(null);
+  const [examples,setExamples]=useState(()=>examplePrompts.slice(0,3));
+  const [showRecents,setShowRecents]=useState(false);
   const [panel,setPanel]=useState<Panel|null>(null);
   const [profileCategory,setProfileCategory]=useState<Category|"global">("主食");
   const [selected,setSelected]=useState<Card|null>(null);
@@ -230,17 +242,8 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
   }
 
   useEffect(()=>{void load();},[]);
-  useEffect(()=>{
-    const viewport=window.visualViewport;
-    if(!viewport)return;
-    const update=()=>{
-      if(viewport.scale===1) shell.current?.style.setProperty("--usable-height",Math.floor(viewport.height)+"px");
-      else shell.current?.style.removeProperty("--usable-height");
-    };
-    update();
-    viewport.addEventListener("resize",update);
-    return()=>viewport.removeEventListener("resize",update);
-  },[]);
+  useEffect(trackLunchViewport,[]);
+  useEffect(()=>{setExamples(sampleExamples([]));},[]);
   useEffect(()=>{
     if(scrollToEnd.current && feed.current) {
       feed.current.scrollTo({top:feed.current.scrollHeight,behavior:"smooth"});
@@ -421,11 +424,13 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
   const rankedDishes=(session?.ranking?.ids??(current?[current.dish.id]:[])).flatMap(id=>{const dish=dishById(id);return dish?[dish]:[];});
   const category=session?activeCategory(session):"主食";
   const conditions=session?effective(session):null;
-  const visibleQuick=session?.quick.slice(0,3)??[];
+  const recents=session?.quick.filter(prompt=>!prompt.sample).slice(0,3)??[];
+  const showingRecents=showRecents&&recents.length>0;
+  const quickPrompts=showingRecents?recents.map(prompt=>prompt.text):examples;
   const lastMessage=messages[messages.length-1];
   const showInitial=messages.length===1 && messages[0].role==="assistant" && Boolean(messages[0].card);
   const activeCardId=[...messages].reverse().find(m=>m.card?.id===current?.id&&m.card?.dish.id===current?.dish.id)?.id;
-  return <div className="shell" ref={shell}>
+  return <div className="shell">
     <header className="topbar"><div className="top-inner">
       <button className="brand" type="button" aria-label="午餐助手首页" onClick={()=>{setWelcome(true);feed.current?.scrollTo(0,0);}}><span className="brand-icon"><ChefHat size={21}/></span><strong>午餐助手</strong></button>
       <div className="top-actions">
@@ -435,10 +440,15 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
     </div></header>
     <main className={welcome?"feed welcome-feed":"feed thread-feed"} ref={feed} aria-label={welcome?"午餐助手首页":"午餐对话"}>
       {welcome? <section className="welcome">
-        <h1>今天中午吃什么<span>？</span></h1>
-        <p className="welcome-note">说说你今天的口味，我帮你挑一份。</p>
-        <div className="welcome-choices" aria-label="快捷需求">
-          {suggestions.map(({label,text,icon:Icon,tone})=><button type="button" key={label} className="welcome-chip" onClick={()=>usePrompt(text)} disabled={busy||recording!=="off"}><span className={`chip-icon ${tone}`}><Icon size={16}/></span>{label}</button>)}
+        <div className="welcome-hero">
+          <div className="welcome-copy">
+            <h1>今天中午<br/>吃什么<span>？</span></h1>
+            <p className="welcome-note">直接说想吃什么，也可以加上餐厅、预算或送达要求。</p>
+          </div>
+          <div className="welcome-photos" aria-hidden="true">
+            <img src="./food/catalog/d14.webp" alt="" decoding="async"/>
+            <img src="./food/catalog/d16.webp" alt="" decoding="async"/>
+          </div>
         </div>
         {!session&&error?<button className="welcome-action" type="button" onClick={load}>重新连接</button>:
           <button className="welcome-action" type="button" disabled={!session||busy} onClick={async()=>{if(!messages.length&&!(await act("recommendations/daily",{},false)))return;scrollToEnd.current=messages.length>1;setWelcome(false);}}>
@@ -446,7 +456,7 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
           </button>}
         <div className="welcome-links">
           <button className="browse-menu" type="button" onClick={()=>setPanel("menu")}><MenuIcon size={16}/> 浏览菜单</button>
-          <button className="browse-menu" type="button" disabled={!session} onClick={()=>setPanel("compare")}>排序</button>
+          <button className="browse-menu" type="button" disabled={!session} onClick={()=>setPanel("compare")}>看推荐排序</button>
         </div>
         {!session&&error&&<p className="welcome-error" role="alert">{error}</p>}
       </section>:<div className="conversation">
@@ -481,12 +491,25 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
     </main>
     <footer className="composer">
       <div className="composer-inner">
-        {transport&&session?.mode==="local"&&<div className="composer-hint">本地推荐模式<button type="button" className="text-btn" disabled={busy||recording!=="off"} onClick={()=>void load()}>重连 AI</button></div>}
-        {error&&session&&<div role="alert" className="inline-error">{error}</div>}
-        {draggingDraft&&<div className="composer-hint">替换当前草稿？ <button className="text-btn" onClick={()=>{setDraft(draggingDraft);setDraggingDraft(null);input.current?.focus();}}>替换</button> <button className="text-btn" onClick={()=>setDraggingDraft(null)}>取消</button></div>}
-        {hint&&<div className="composer-hint" role="status">{hint}<button className="text-btn" aria-label="关闭提示" onClick={()=>setHint("")}><X size={15}/></button></div>}
-        {!!visibleQuick.length&&!session?.hideQuick&&recording==="off"&&!welcome&&
-          <div className="quick"><span>{visibleQuick.some(q=>!q.sample)?"最近用过":"示例输入"}</span>{visibleQuick.map(q=><button type="button" key={q.id} onClick={()=>usePrompt(q.text)} title={q.text}>{q.text}</button>)}</div>}
+        <div className="composer-support">
+          {transport&&session?.mode==="local"&&<div className="composer-hint">本地推荐模式<button type="button" className="text-btn" disabled={busy||recording!=="off"} onClick={()=>void load()}>重连 AI</button></div>}
+          {error&&session&&<div role="alert" className="inline-error">{error}</div>}
+          {draggingDraft&&<div className="composer-hint">替换当前草稿？ <button className="text-btn" onClick={()=>{setDraft(draggingDraft);setDraggingDraft(null);input.current?.focus();}}>替换</button> <button className="text-btn" onClick={()=>setDraggingDraft(null)}>取消</button></div>}
+          {hint&&<div className="composer-hint" role="status">{hint}<button className="text-btn" aria-label="关闭提示" onClick={()=>setHint("")}><X size={15}/></button></div>}
+          {!session?.hideQuick&&recording==="off"&&
+            <div className="quick-panel">
+              <div className="quick-heading">
+                <span>{showingRecents?"最近用过":"试试这样问"}</span>
+                <div className="quick-actions">
+                  {!showingRecents&&<button type="button" onClick={()=>setExamples(sampleExamples)} aria-label="换一组示例"><Shuffle size={14}/> 换一组</button>}
+                  {recents.length>0&&<button type="button" onClick={()=>setShowRecents(!showingRecents)} aria-label={showingRecents?"显示示例":"查看最近用过的话"}><History size={14}/> {showingRecents?"看示例":"最近用过"}</button>}
+                </div>
+              </div>
+              <div className="quick" key={quickPrompts.join("|")} role="group" aria-label={showingRecents?"最近用过":"快捷提示词"}>
+                {quickPrompts.map(text=><button key={text} type="button" disabled={busy||!session} onClick={()=>usePrompt(text)}>{text}</button>)}
+              </div>
+            </div>}
+        </div>
         {recording==="off" ? <form className="input-box" onSubmit={send}>
           <textarea ref={input} placeholder="说说今天想吃什么…" aria-label="今天想吃什么" maxLength={240} rows={1} value={draft} onChange={e=>setDraft(e.target.value)}
             onKeyDown={event=>{if(event.key==="Enter"&&!event.shiftKey&&!event.nativeEvent.isComposing){event.preventDefault();void send();}}}/>
