@@ -97,6 +97,8 @@ const dishAliases:Record<string,string>={"天妇罗虾":"炸虾天妇罗","炸�
 const genericMeats:Record<string,string>={"鱼肉":"鱼"};
 const genericFood=/^(?:午饭|午餐|正餐|主食|饭|米饭|盖饭|配饭|杂粮|面|面条|汤面|米线|面食|炒面|拌面|甜点|甜品|甜的|零食|小吃|蔬菜|素菜|素食|配菜|水果|果盘|果切|好吃的|吃的|什么|东西|都行|随便|换一道|一道菜|肉|荤菜|菜|今天的推荐)$/;
 const cookingMethods=new Set(menu.map(dish=>dish.method));
+const riceExclusion=/(?:不(?:再)?想(?:要|吃)?|不(?:要|吃|能吃|用|加|带)|别(?:给我|吃|加|带|推荐)|去掉)(?:再|吃|加|带)?(?:米饭|白饭|盖饭|配饭)|不(?:含米饭|配饭)/g;
+const riceAllowed=/(?:米饭|白饭)(?:现在)?(?:也可以|也行|都行)|(?:也)?可以吃(?:米饭|白饭)(?:了|$|[，。；！？])/;
 
 function dishRequest(query:string,category:Category):Selection|undefined {
   const direct=query.match(/(?:^|[，,。；！？])(?:我)?(?:今天|这次|现在|中午|午休|午饭|还是)*(?:(?:想|要)吃|想来|来|给我|推荐|改吃|换成|改成)([^，,。；！？]+)/)?.[1];
@@ -166,13 +168,15 @@ export function ruleIntent(text:string,session:Session) {
     selection.flavor=undefined;
     selection.noSpice=undefined;
   }
+  const stapleQuery=query.replace(riceExclusion,"");
+  const excludesRice=stapleQuery!==query;
   if (/不要主食|无主食|不吃主食/.test(query)) {
     patch.staple="无主食";
     selection.staple="无";
-  } else if (/米饭|配饭/.test(query) && !/不要米饭|不吃米饭/.test(query)) patch.staple="优先米饭";
+  } else if (/米饭|白饭|盖饭|配饭/.test(stapleQuery)) patch.staple=riceAllowed.test(stapleQuery)?"不限":"优先米饭";
   else if (/有主食|带主食/.test(query)) patch.staple="优先有主食";
-  const mainFood=query.replace(/(?:不要|不吃|不想吃|不加|别推荐)(?:吃)?(?:面条|汤面|米线|面食|炒面|拌面|米饭|杂粮|面)/g,"");
-  if (/(?:必须|一定要|只吃|就要|改吃|改成|换成|还是要)(?:吃|有|带)?(?:米饭|盖饭|配饭)/.test(mainFood)) selection.staple="米饭";
+  const mainFood=stapleQuery.replace(/(?:不要|不吃|不想吃|不加|别推荐)(?:吃)?(?:面条|汤面|米线|面食|炒面|拌面|米饭|杂粮|面)/g,"");
+  if (/(?:必须|一定要|只吃|就要|改吃|改成|换成|还是要)(?:吃|有|带)?(?:米饭|白饭|盖饭|配饭)/.test(mainFood)) selection.staple="米饭";
   else if (/面条|汤面|米线|面食|炒面|拌面|来碗面|(?:吃|的|一碗)面(?:$|[，。！？])/.test(mainFood)) {
     if (/(?:最好|优先|偏向|尽量)[^，。；]{0,6}(?:面条|汤面|米线|面食|炒面|拌面)/.test(mainFood)) {
       selection.staple=undefined;
@@ -196,7 +200,7 @@ export function ruleIntent(text:string,session:Session) {
   if (/主食不限|主食随意|取消主食限制/.test(query)) {
     patch.staple="不限";selection.staple=undefined;selection.preferredStaple=undefined;
   }
-  const requestedCategory=query.replace(/(?:不要|不吃|不想吃|别推荐|别加)(?:吃)?(?:主食|甜点|甜品|零食|小吃|蔬菜|水果|米饭)/g,"");
+  const requestedCategory=stapleQuery.replace(/(?:不要|不吃|不想吃|别推荐|别加)(?:吃)?(?:主食|甜点|甜品|零食|小吃|蔬菜|水果|米饭)/g,"");
   if (/甜点|甜品|布丁|蛋挞/.test(requestedCategory)) selection.category="甜点";
   else if (/零食|小吃|解馋/.test(requestedCategory)) selection.category="零食";
   else if (/水果|果盘|鲜切|果切/.test(requestedCategory)) selection.category="水果";
@@ -234,6 +238,12 @@ export function ruleIntent(text:string,session:Session) {
       historical=source.id;
     } else question="没查到对应的订单。你还记得大概是什么口味吗？";
   }
+  if (excludesRice && patch.staple!=="无主食") {
+    patch.staple="不含米饭";
+    if (!selection.staple || selection.staple==="米饭") selection.staple=undefined;
+  } else if (riceAllowed.test(stapleQuery) || patch.staple==="优先米饭" && !selection.staple) {
+    selection.staple=undefined;
+  }
   const changesStaple=Boolean(selection.staple && session.selection?.staple &&
     selection.staple!==session.selection.staple);
   const contextCategory=session.pending?.selection?.category??activeCategory(session);
@@ -252,7 +262,7 @@ export function ruleIntent(text:string,session:Session) {
       new RegExp("(?:可以吃|想吃|能吃)"+food).test(clause)));
   const longTerm=/以后|长期|今后|从今往后|一直不吃/.test(query);
   const unknownAvoid = !patch.avoid?.length && /(?:别放|不加|忌口是|不吃)[\p{Script=Han}]{1,10}/u.exec(query);
-  if (unknownAvoid && !/不吃(?:炸|主食|米饭|油炸|肉|荤|辣)/.test(query)) question ||= "这项忌口没有匹配菜单食材标签。请在「我的偏好」确认食材后再推荐。";
+  if (unknownAvoid && !excludesRice && !/不吃(?:炸|主食|米饭|油炸|肉|荤|辣)/.test(query)) question ||= "这项忌口没有匹配菜单食材标签。请在「我的偏好」确认食材后再推荐。";
   if (/^(?:我)?(?:改主意了|反悔了?|算了)[。！!？?]*$/.test(raw)) question="想改哪一项？可以直接告诉我新的口味、主食或预算。";
   return {patch,selection,category,newRequest,question,conflict,historical,longTerm,restoreAvoid,meaning:query};
 }
@@ -279,7 +289,8 @@ export async function interpret(text:string,session:Session,context:Models,clien
     delete proposal.servings;
     delete proposal.maxEta;
     if (!("avoid" in rule.patch)) delete proposal.avoid;
-    if (!/主食|米饭|配饭|面条|杂粮/.test(rule.meaning)) delete proposal.staple;
+    if (proposal.staple==="不含米饭" || effective(session).staple==="不含米饭" ||
+      !/主食|米饭|配饭|面条|杂粮/.test(rule.meaning)) delete proposal.staple;
     if (!/便宜|价格|预算|元|块/.test(rule.meaning)) delete proposal.target;
     const patch={...proposal,...rule.patch};
     const question=typeof result.question==="string" ? result.question.slice(0,120).trim() : "";
@@ -309,6 +320,7 @@ export function eligible(session:Session,dish:Dish,blockedMains=yesterdayMains(s
   const meat=["牛肉","猪肉","鸡肉","羊肉","鸭肉","鱼","虾","贝类","鱿鱼"];
   return dish.category===category && (!selection.flavor || dish.flavor===selection.flavor)
     && (!selection.noSpice || dish.flavor!=="香辣" && !dish.ingredients.includes("辣椒"))
+    && (p.staple!=="不含米饭" || dish.staple!=="米饭")
     && (!selection.staple || dish.staple===selection.staple)
     && (!selection.ingredient || dish.ingredients.includes(selection.ingredient))
     && (!selection.dishIds || selection.dishIds.includes(dish.id))
@@ -345,7 +357,9 @@ type Ranking = {scores:Score[]; orders:Card["orders"]; menuMode:string; orderMod
 async function rank(session:Session, query:string, context:Models, fullMenu=false):Promise<Ranking> {
   const p=effective(session);
   const blockedMains=yesterdayMains(session);
-  const options=menu.filter(dish=>fullMenu?inService(dish,blockedMains):eligible(session,dish,blockedMains));
+  const options=menu.filter(dish=>fullMenu
+    ? inService(dish,blockedMains) && (p.staple!=="不含米饭" || dish.staple!=="米饭")
+    : eligible(session,dish,blockedMains));
   const history=session.orders.filter(o=>o.dish.category===activeCategory(session)&&o.day>=moveDay(session.day,-30)&&o.day<=session.day);
   const queryText=[query, activeCategory(session), session.selection?.staple??session.selection?.preferredStaple, p.flavor==="不限"?"":p.flavor,p.staple,p.lowOil?"少油":"",p.noFry?"清蒸 炖煮":""].filter(Boolean).join(" ");
   const docs=[queryText,...options.map(document),...history.map(o=>document(o.dish))];

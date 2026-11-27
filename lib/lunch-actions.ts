@@ -16,12 +16,13 @@ function add(session:Session, message:Omit<Message,"id">) {
 function noResult(session:Session) {
   const selection=session.selection??{};
   const category=activeCategory(session);
-  const {budget,avoid,servings,maxEta}=effective(session);
+  const {budget,avoid,servings,maxEta,staple}=effective(session);
   const labels=[
     selection.noSpice?"不辣":selection.flavor,
     selection.requestedDish?"想吃"+selection.requestedDish:selection.ingredient?"含"+selection.ingredient:undefined,
     selection.method,
     selection.staple==="无"?"不含主食":selection.staple?"含"+selection.staple:undefined,
+    staple==="不含米饭"?staple:undefined,
     selection.lowOil?"少油":undefined,
     selection.noFry?"非油炸":undefined,
     selection.meatless?"不含肉类":undefined,
