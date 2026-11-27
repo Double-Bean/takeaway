@@ -20,6 +20,7 @@ function noResult(session:Session) {
   if (selection.unavailableDish) return `菜单里没有「${selection.unavailableDish}」，暂无符合条件的菜品。想看看其他菜，可以直接告诉我。`;
   const labels=[
     selection.shop,
+    selection.excludedShops?.length?"排除"+selection.excludedShops.join("、"):undefined,
     selection.noSpice?"不辣":selection.flavor,
     selection.ingredient?"含"+selection.ingredient:undefined,
     selection.method,
@@ -40,7 +41,7 @@ function noResult(session:Session) {
 }
 function mergeSelection(current:Selection, incoming:Selection) {
   if(incoming.category && incoming.category!==(current.category??"主食")) {
-    return {shop:current.shop,orderBy:current.orderBy,...incoming};
+    return {shop:current.shop,excludedShops:current.excludedShops,orderBy:current.orderBy,...incoming};
   }
   const selection={...current,...incoming};
   if ("staple" in incoming && !("preferredStaple" in incoming)) delete selection.preferredStaple;
@@ -140,8 +141,9 @@ export async function applyAction(session:Session,models:Models,path:string,body
       if (interpreted.selection.unavailableDish) {
         session.selection={
           ...(interpreted.newRequest?{}:session.selection),
+          ...("shop" in interpreted.selection?{shop:interpreted.selection.shop}:{}),
+          ...("excludedShops" in interpreted.selection?{excludedShops:interpreted.selection.excludedShops}:{}),
           category:interpreted.category,
-          shop:interpreted.selection.shop??(interpreted.newRequest?undefined:session.selection?.shop),
           unavailableDish:interpreted.selection.unavailableDish,
           preferredDish:undefined,
         };
@@ -175,7 +177,7 @@ export async function applyAction(session:Session,models:Models,path:string,body
       session.comparison=null;
       if(interpreted.alternatives) delete session.selection.preferredDish;
       const reference=session.orders.find(o=>o.id===interpreted.historical);
-      await recommend(session,models,text,reference ? `查到${reference.sample?"样例订单":"历史订单"}里的${reference.dish.name}。我按相近口味另挑了一道。` : "按你刚才的要求，我找到了这份。",interpreted.mode);
+      await recommend(session,models,text,reference ? `查到${reference.sample?"样例订单":"历史订单"}里的${reference.dish.name}。我按相近口味另挑了一道。` : interpreted.shopRevision ? "换了家店，看看这份。" : "按你刚才的要求，我找到了这份。",interpreted.mode);
       if (interpreted.longTerm && Object.keys(interpreted.patch).length) {
         add(session,{role:"assistant",text:"可以把本句提到的改动保存到「"+interpreted.category+"」长期偏好。",proposal:{category:interpreted.category,patch:interpreted.patch}});
       }

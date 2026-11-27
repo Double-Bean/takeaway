@@ -82,6 +82,35 @@ try {
     await send(legacy,"小满厨房是餐厅名称");
     assert.equal(card(legacy).dish.shop,"小满厨房");
   });
+  await check("反悔换店排除原餐厅，保留预算、忌口和配送排序",async()=>{
+    for (const phrase of ["算了吧，还是吃其他家的","换一家吧","不吃这家了","还是吃别家的吧","我不想吃饭点食堂的了"]) {
+      const s=await send(await freshen(seed(),local),"我要吃饭点食堂的，28元以内，不要香菜，最快送到");
+      assert.equal(card(s).dish.shop,"饭点食堂",phrase);
+      await applyAction(s,local,"messages",{text:phrase,modelResult:{dish:"其他家的",shop:"饭点食堂",newRequest:true}});
+      assert.equal(s.pending,null,phrase);
+      assert(card(s),phrase);
+      assert.notEqual(card(s).dish.shop,"饭点食堂",phrase);
+      assert.equal(effective(s).budget,28,phrase);
+      assert(effective(s).avoid.includes("香菜"),phrase);
+      assert.equal(s.selection.orderBy,"eta",phrase);
+      const matches=menu.filter(dish=>eligible(s,dish));
+      assert(matches.every(dish=>dish.shop!=="饭点食堂"),phrase);
+      assert.equal(card(s).dish.eta,Math.min(...matches.map(dish=>dish.eta)),phrase);
+      await send(s,"再换一道");
+      assert.notEqual(card(s).dish.shop,"饭点食堂",phrase);
+    }
+  });
+  await check("可以重新选择之前排除的店，或明确放开店铺条件",async()=>{
+    const s=await send(await start(),"我要吃饭点食堂的");
+    await send(s,"算了吧，还是吃其他家的");
+    await send(s,"我又改主意了，还是吃饭点食堂吧");
+    assert.equal(card(s).dish.shop,"饭点食堂");
+    await send(s,"换家店");
+    assert(s.selection.excludedShops.includes("饭点食堂"));
+    await send(s,"哪家都行");
+    assert.equal(s.selection.excludedShops,undefined);
+    assert.equal(s.selection.shop,undefined);
+  });
   await check("菜名缺失时不替用户换菜，明确同意后可继续推荐",async()=>{
     const s=await send(await start(),"我想吃小满厨房的饭");
     for (const request of ["我要吃佛跳墙","佛跳墙","有佛跳墙吗？"]) {
