@@ -1,0 +1,78 @@
+name: Release ModelScope runtime
+
+on:
+  push:
+    branches: [deploy/modelscope]
+    paths: [studio/**, Dockerfile]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: modelscope-jincy0610-takeaway
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the ModelScope release
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Sync application to the Studio Git repository
+        env:
+          MODELSCOPE_API_KEY: ${{ secrets.MODELSCOPE_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$MODELSCOPE_API_KEY" ]]; then
+            echo '::error::Add the MODELSCOPE_API_KEY repository Actions secret before running this workflow.'
+            exit 1
+          fi
+
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "$workdir"' EXIT
+          cat > "$workdir/askpass" <<'EOF'
+          #!/usr/bin/env bash
+          case "$1" in
+            Username*) printf '%s\n' oauth2 ;;
+            Password*) printf '%s\n' "$MODELSCOPE_API_KEY" ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          chmod 700 "$workdir/askpass"
+          export GIT_ASKPASS="$workdir/askpass" GIT_TERMINAL_PROMPT=0
+
+          studio_url=https://www.modelscope.cn/studios/Jincy0610/takeaway.git
+          destination="$workdir/studio"
+          git -c credential.helper= clone --depth 1 --branch master "$studio_url" "$destination"
+          git archive HEAD Dockerfile .dockerignore .npmrc package.json package-lock.json \
+            tsconfig.json vite.pages.config.ts postcss.config.mjs app/globals.css \
+            components lib pages-site public studio scripts/build-studio.mjs | tar -x -C "$destination"
+
+          source_sha="$(git rev-parse --short HEAD)"
+          git -C "$destination" add --all
+          if ! git -C "$destination" diff --cached --quiet; then
+            git -C "$destination" -c user.name='GitHub Actions' -c user.email='actions@users.noreply.github.com' \
+              commit -m "Deploy Lunch Assistant from GitHub $source_sha"
+            git -C "$destination" -c credential.helper= push origin HEAD:master
+          fi
+          expected="$(git -C "$destination" rev-parse HEAD)"
+          actual="$(git -C "$destination" -c credential.helper= ls-remote origin refs/heads/master | cut -f 1)"
+          test "$expected" = "$actual"
+          echo "ModelScope master is at $actual (GitHub source $source_sha)."
+
+      - name: Deploy the synchronized revision
+        env:
+          MODELSCOPE_API_KEY: ${{ secrets.MODELSCOPE_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'Authorization: Bearer %s\n' "$MODELSCOPE_API_KEY" |
+            curl --fail-with-body --silent --show-error --max-time 60 --request POST --header @- \
+              'https://www.modelscope.cn/openapi/v1/studios/Jincy0610/takeaway/deploy' |
+            jq -e 'if .success == false or .Success == false then error(.message // .Message // "Deployment request failed") else .data.status // .Data.status // error("No runtime status returned") end'

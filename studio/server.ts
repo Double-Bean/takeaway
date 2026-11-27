@@ -74,7 +74,7 @@ async function serveApi(request:IncomingMessage,response:ServerResponse,url:URL)
 }
 
 function requestOrigin(request:IncomingMessage) {
-  const studioHost=process.env.STUDIO_HOST?.trim();
+  const studioHost=process.env.LUNCH_PUBLIC_ORIGIN?.trim() || process.env.STUDIO_HOST?.trim();
   if(studioHost) return new URL(studioHost.includes("://")?studioHost:`https://${studioHost}`).origin;
 
   // The Studio proxy may replace the host with an internal address. Fetch
