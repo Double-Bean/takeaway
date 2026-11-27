@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { Check, ChefHat, Menu as MenuIcon, ChevronDown, ChevronRight, Clock3, History, KeyRound, Mic, RefreshCw, Send, Settings2, Shuffle, Sparkles, Square, X } from "lucide-react";
+import { Check, ChefHat, Menu as MenuIcon, ChevronDown, ChevronRight, Clock3, Flame, History, KeyRound, Leaf, Mic, RefreshCw, Send, Settings2, Sparkles, Square, Wallet, X } from "lucide-react";
 import { categories, dishById, feedbackReasons, flavors, foods, menu, staples, type Category, type Dish } from "@/lib/lunch-data";
 import type { Card, Pref, Session } from "@/lib/lunch-types";
 import type { PersonalModelId } from "@/lib/lunch-byok";
@@ -165,10 +165,17 @@ const examplePrompts=[
   "今天想吃清淡点，不加香菜",
 ];
 
-function sampleExamples(previous:readonly string[]) {
-  const pool=examplePrompts.filter(prompt=>!previous.includes(prompt));
+function sampleExamples() {
+  const pool=[...examplePrompts];
   return Array.from({length:3},()=>pool.splice(Math.floor(Math.random()*pool.length),1)[0]);
 }
+
+const suggestions=[
+  {label:"清爽少油",text:"今天想吃清爽少油一点，最好有米饭",icon:Leaf,tone:"green"},
+  {label:"25 元以内",text:"今天午饭想控制在 25 元以内",icon:Wallet,tone:"gold"},
+  {label:"香辣配饭",text:"今天想吃辣，最好有米饭",icon:Flame,tone:"red"},
+  {label:"参考上一餐",text:"想吃像上次那种，帮我换一道",icon:History,tone:"blue"},
+];
 
 const names:Record<Panel,string>={api:"API 设置",profile:"我的偏好",today:"本轮条件",orders:"午饭订单",evidence:"为什么推荐这道",compare:"本轮排序",confirm:"确认模拟下单",microphone:"用语音说说今天想吃什么",menu:"查看模拟菜单"};
 export type LunchTransport = {
@@ -243,7 +250,7 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
 
   useEffect(()=>{void load();},[]);
   useEffect(trackLunchViewport,[]);
-  useEffect(()=>{setExamples(sampleExamples([]));},[]);
+  useEffect(()=>{setExamples(sampleExamples());},[]);
   useEffect(()=>{
     if(scrollToEnd.current && feed.current) {
       feed.current.scrollTo({top:feed.current.scrollHeight,behavior:"smooth"});
@@ -435,20 +442,15 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
       <button className="brand" type="button" aria-label="午餐助手首页" onClick={()=>{setWelcome(true);feed.current?.scrollTo(0,0);}}><span className="brand-icon"><ChefHat size={21}/></span><strong>午餐助手</strong></button>
       <div className="top-actions">
         <button className="prefs-button api-top-button" type="button" disabled={!session} onClick={()=>setPanel("api")}><KeyRound size={16}/> API 设置</button>
-        <button className="prefs-button" type="button" disabled={!session} onClick={()=>setPanel("profile")} aria-label="我的偏好"><Settings2 size={18}/> <span>我的偏好</span></button>
+        <button className="prefs-button" type="button" disabled={!session} onClick={()=>{setProfileCategory(category);setPanel("profile");}} aria-label="我的偏好"><Settings2 size={18}/> <span>我的偏好</span></button>
       </div>
     </div></header>
     <main className={welcome?"feed welcome-feed":"feed thread-feed"} ref={feed} aria-label={welcome?"午餐助手首页":"午餐对话"}>
       {welcome? <section className="welcome">
-        <div className="welcome-hero">
-          <div className="welcome-copy">
-            <h1>今天中午<br/>吃什么<span>？</span></h1>
-            <p className="welcome-note">直接说想吃什么，也可以加上餐厅、预算或送达要求。</p>
-          </div>
-          <div className="welcome-photos" aria-hidden="true">
-            <img src="./food/catalog/d14.webp" alt="" decoding="async"/>
-            <img src="./food/catalog/d16.webp" alt="" decoding="async"/>
-          </div>
+        <h1>今天中午吃什么<span>？</span></h1>
+        <p className="welcome-note">直接说想吃什么，也可以加上餐厅、预算或送达要求。</p>
+        <div className="welcome-choices" aria-label="快捷需求">
+          {suggestions.map(({label,text,icon:Icon,tone})=><button type="button" key={label} className="welcome-chip" onClick={()=>usePrompt(text)} disabled={busy||recording!=="off"}><span className={`chip-icon ${tone}`}><Icon size={16}/></span>{label}</button>)}
         </div>
         {!session&&error?<button className="welcome-action" type="button" onClick={load}>重新连接</button>:
           <button className="welcome-action" type="button" disabled={!session||busy} onClick={async()=>{if(!messages.length&&!(await act("recommendations/daily",{},false)))return;scrollToEnd.current=messages.length>1;setWelcome(false);}}>
@@ -498,16 +500,11 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
           {hint&&<div className="composer-hint" role="status">{hint}<button className="text-btn" aria-label="关闭提示" onClick={()=>setHint("")}><X size={15}/></button></div>}
           {!session?.hideQuick&&recording==="off"&&
             <div className="quick-panel">
-              <div className="quick-heading">
+              <div className="quick" key={showingRecents?"recents":"examples"} role="group" aria-label={showingRecents?"最近用过":"快捷提示词"}>
                 <span>{showingRecents?"最近用过":"试试这样问"}</span>
-                <div className="quick-actions">
-                  {!showingRecents&&<button type="button" onClick={()=>setExamples(sampleExamples)} aria-label="换一组示例"><Shuffle size={14}/> 换一组</button>}
-                  {recents.length>0&&<button type="button" onClick={()=>setShowRecents(!showingRecents)} aria-label={showingRecents?"显示示例":"查看最近用过的话"}><History size={14}/> {showingRecents?"看示例":"最近用过"}</button>}
-                </div>
-              </div>
-              <div className="quick" key={quickPrompts.join("|")} role="group" aria-label={showingRecents?"最近用过":"快捷提示词"}>
                 {quickPrompts.map(text=><button key={text} type="button" disabled={busy||!session} onClick={()=>usePrompt(text)}>{text}</button>)}
               </div>
+              {recents.length>0&&<button className="quick-toggle" type="button" onClick={()=>setShowRecents(!showingRecents)} aria-label={showingRecents?"显示示例":"查看最近用过的话"}><History size={14}/> {showingRecents?"看示例":"最近用过"}</button>}
             </div>}
         </div>
         {recording==="off" ? <form className="input-box" onSubmit={send}>

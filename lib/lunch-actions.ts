@@ -219,6 +219,11 @@ export async function applyAction(session:Session,models:Models,path:string,body
           : avoid;
         const {avoid:_unused,...stored}=categoryPreference(session,category);
         session.categoryProfiles={...session.categoryProfiles,[category]:{...stored,...categoryPatch}};
+        if (category===activeCategory(session) && ("budget" in categoryPatch || "target" in categoryPatch)) {
+          // An explicit budget save also updates this category's current recommendation.
+          delete session.today.budget;
+          delete session.today.target;
+        }
         if (category!==activeCategory(session) && !avoid) {
           await refreshRanking(session,models);
           return session;

@@ -561,6 +561,32 @@ try {
     assert.equal(card(s).dish.flavor,"香辣");
     assert(card(s).dish.price<=25);
   });
+  await check("在我的偏好连续保存预算会应用到当前推荐，保留其他本轮条件",async()=>{
+    const s=await send(await start(),"我想吃好一碗这家店，30元以内，不加香菜");
+    assert.equal(card(s).dish.shop,"好一碗");
+    assert.equal(s.today.budget,30);
+    for (const cap of [28,25,20,29]) {
+      await applyAction(s,local,"preferences/profile",{category:"主食",patch:{budget:cap}});
+      assert.equal(categoryPreference(s,"主食").budget,cap);
+      assert.equal(effective(s).budget,cap);
+      assert.equal(s.selection.shop,"好一碗");
+      assert(effective(s).avoid.includes("香菜"));
+      assert(menu.filter(dish=>eligible(s,dish)).every(dish=>dish.price<=cap));
+      if (card(s)) {
+        assert.equal(card(s).conditions.budget,cap);
+        assert(card(s).dish.price<=cap);
+      }
+    }
+    assert(card(s));
+    await send(s,"预算26元左右");
+    assert.equal(effective(s).target,26);
+    await applyAction(s,local,"preferences/profile",{category:"水果",patch:{budget:10}});
+    assert.equal(effective(s).target,26);
+    assert.equal(categoryPreference(s,"水果").budget,10);
+    await applyAction(s,local,"preferences/profile",{category:"主食",patch:{budget:25}});
+    assert.equal(effective(s).budget,25);
+    assert.equal(effective(s).target,null);
+  });
   await check("长期忌口适用于所有类别，更新列表后不保留已删除项",async()=>{
     const s=await start();
     await applyAction(s,local,"preferences/profile",{category:"水果",patch:{budget:13,flavor:"甜味",avoid:["西瓜"]}});
