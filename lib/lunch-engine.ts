@@ -128,6 +128,10 @@ function dishRequest(query:string,category:Category):{selection:Selection; name?
   return {selection:matchedCategory?{category:matchedCategory}:{},name,ids:matching.map(dish=>dish.id)};
 }
 
+const fastestDelivery=/最快|(?:配送|送到|送达)(?:要|能|尽量)?(?:更快|快一点|快点|快一些)|(?:尽快|快一点|快点|更快)(?:送到|送达|配送)|(?:配送|送到|送达)(?:时间|耗时)?(?:最短|最少)/;
+const optionalChoice=/^(?:随便(?:吧|选|挑)?|都(?:行|可以)|不限|不挑|无所谓|你(?:决定|看着办)|(?:哪家|什么)都(?:行|可以))[。！!]?$/;
+export const recommendationFactMode="菜单与推荐排序";
+
 export function ruleIntent(text:string,session:Session) {
   const raw=text.normalize("NFKC").replace(/\s+/g,"");
   const revising=/改主意|反悔|还是|改吃|改喝|改要|改成|改到|换成|不是.+而是|可以.+了|也可以|不限了|不用再|取消.*限制/.test(raw);
@@ -137,6 +141,14 @@ export function ruleIntent(text:string,session:Session) {
   const selection:Selection={};
   let question="";
   let historical="";
+  const anyChoice=optionalChoice.test(query);
+  const pendingShopChoice=anyChoice && /餐馆|餐厅|饭店|店铺|商家|哪家/.test(session.pending?.question??"");
+  const previousQuery=pendingShopChoice
+    ? session.messages.filter(message=>message.role==="user").findLast(message=>!optionalChoice.test(message.text.normalize("NFKC").replace(/\s+/g,"")))?.text
+    : undefined;
+  if (fastestDelivery.test(query)||previousQuery&&fastestDelivery.test(previousQuery)) selection.orderBy="eta";
+  if (/不着急|配送时间随意|(?:不用|不必|不要)(?:再)?(?:选)?最快|(?:不用|取消)(?:按)?(?:配送|送达)(?:时间)?(?:排序|优先)/.test(query)) selection.orderBy=undefined;
+  if (selection.orderBy) selection.unavailableDish=undefined;
   const shopText=query.replace(/(?:不要|不吃|不想吃|别推荐)(?:吃)?[^，。；！？]+/g,"");
   const previousShop=/^(?:是|指的是)?(?:餐厅|饭店|店铺|商家|店)(?:的)?(?:名(?:称|字))?(?:[。！]?$)/.test(query)
     ? session.messages.filter(message=>message.role==="user"&&message.text!==text).slice(-4).reverse()
@@ -144,7 +156,7 @@ export function ruleIntent(text:string,session:Session) {
     : undefined;
   const shop=menuShops.find(name=>shopText.includes(name))??previousShop;
   if(shop) selection.shop=shop;
-  if (/不限(?:制)?(?:餐厅|店铺)|换家店|其他(?:餐厅|店铺)|别只看这家/.test(query)) selection.shop=undefined;
+  if (pendingShopChoice || /不限(?:制)?(?:餐厅|餐馆|店铺)|换家店|其他(?:餐厅|店铺)|别只看这家|(?:餐厅|餐馆|店铺|商家)(?:随便|不限|都行)|哪家都(?:行|可以)/.test(query)) selection.shop=undefined;
   const alternatives=/别的|其他菜|替代|换一道|换一个|换个菜|随便推荐/.test(query);
   if(!shop && /^(?:这家|那家|这间|那间)/.test(query) && session.selection?.shop) selection.shop=session.selection.shop;
   if(alternatives) selection.unavailableDish=undefined;
@@ -266,7 +278,7 @@ export function ruleIntent(text:string,session:Session) {
   const changesStaple=Boolean(selection.staple && session.selection?.staple &&
     selection.staple!==session.selection.staple);
   const contextCategory=session.pending?.selection?.category??activeCategory(session);
-  const continuation=Boolean(previousShop || /^(?:那|这家|上一份|刚才|再|也|它|这道|这个|能不能|有没有)/.test(query) || alternatives);
+  const continuation=Boolean(previousShop || anyChoice || selection.orderBy || /^(?:那|这家|上一份|刚才|再|也|它|这道|这个|能不能|有没有)/.test(query) || alternatives);
   const newRequest=isHistorical || (selection.category!==undefined&&selection.category!==contextCategory) ||
     (!revising&&!continuation&&(changesStaple||startsRequest(query,session,selection.category)));
   const category=selection.category??(newRequest?"主食":session.pending?.selection?.category??activeCategory(session));
@@ -286,15 +298,16 @@ export function ruleIntent(text:string,session:Session) {
   const longTerm=/以后|长期|今后|从今往后|一直不吃/.test(query);
   const unknownAvoid = !patch.avoid?.length && /(?:别放|不加|忌口是|不吃)[\p{Script=Han}]{1,10}/u.exec(query);
   if (unknownAvoid && !/不吃(?:炸|主食|米饭|油炸|肉|荤|辣)/.test(query)) question ||= "这项忌口没有匹配菜单食材标签。请在「我的偏好」确认食材后再推荐。";
+  if (anyChoice && session.pending?.question.includes("忌口没有匹配")) question=session.pending.question;
   if (/^(?:我)?(?:改主意了|反悔了?|算了)[。！!？?]*$/.test(raw)) question="想改哪一项？可以直接告诉我新的口味、主食或预算。";
-  return {patch,selection,category,newRequest,question,conflict,historical,longTerm,restoreAvoid,meaning:query,mentionedDish:dish?.name,alternatives};
+  return {patch,selection,category,newRequest,question,conflict,historical,longTerm,restoreAvoid,meaning:query,mentionedDish:dish?.name,alternatives,anyChoice};
 }
 
 export function requestInterpretation(text:string,session:Session,context:Models) {
   const rule=ruleIntent(text,session);
   const current=session.batch?.card?.dish;
   return ask(context,
-    "你是中文午餐助手。只输出 JSON {patch,question,reply,dish,shop,newRequest}，省略不用的字段。最新消息是本轮输入，结合近期对话、当前条件和待澄清问题理解指代与省略。patch 仅含用户明确新增或修改的 budget、target、flavor、staple、avoid、lowOil、noFry。dish 只填明确要求的具体菜名，可以不在菜单中。泛指食材、口味、餐厅或菜品类别时留空。shop 只填菜单餐厅中的指定店名。明确要换一个全新的餐饮需求才填 newRequest:true。对当前菜品的价格、食材等问题按给出的菜品事实用 reply 回答。闲聊或询问使用方法也可以用 reply。推荐或修改条件走 patch 等结构化字段，不在 reply 里编造菜、库存、价格或订单。只有缺少必要信息时才填 question，已在历史消息中作答的不要再问。菜单及忌口以系统核验为准。",
+    "你是中文午餐助手。只输出 JSON {patch,reply,dish,shop,newRequest}，省略不用的字段。最新消息是本轮输入，结合近期对话、当前条件和待澄清问题理解指代与省略。patch 仅含用户明确新增或修改的 budget、target、flavor、staple、avoid、lowOil、noFry。dish 只填明确要求的具体菜名，可以不在菜单中。泛指食材、口味、餐厅或菜品类别时留空。shop 只填菜单餐厅中的指定店名。明确要换一个全新的餐饮需求才填 newRequest:true。对当前菜品的价格、食材等问题按给出的菜品事实用 reply 回答。闲聊或询问使用方法也可以用 reply。推荐或修改条件走 patch 等结构化字段，不在 reply 里编造菜、库存、价格或订单。餐厅、口味、预算等可选条件缺失时直接进入推荐流程，省略相应字段。最快送达是排序要求，省略 reply 和 dish。菜单及忌口以系统核验为准。",
     {text,history:session.messages.filter((_,i)=>i!==session.messages.length-1||session.messages[i].role!=="user"||session.messages[i].text!==text).slice(-10).map(({role,text,card})=>({role,text,...(card?{dish:card.dish.name}:{})})),
       category:rule.category,conditions:effective(session),selection:session.selection,pending:session.pending,
       dish:current&&{name:current.name,shop:current.shop,price:current.price,eta:current.eta,ingredients:current.ingredients,flavor:current.flavor,method:current.method,staple:current.staple,servings:current.servings},
@@ -318,9 +331,9 @@ function localReply(text:string,session:Session) {
 
 export async function interpret(text:string,session:Session,context:Models,clientProposal:unknown) {
   const rule=ruleIntent(text,session);
-  const fallback=rule.mentionedDish?"":localReply(text,session);
+  const fallback=rule.mentionedDish||rule.selection.orderBy||rule.anyChoice?"":localReply(text,session);
   const base={...rule,reply:fallback,mode:"规则解析"};
-  if (!context.key && clientProposal===undefined) return base;
+  if (rule.anyChoice || !context.key && clientProposal===undefined) return base;
   try {
     const result=clientProposal===undefined
       ? await requestInterpretation(text,session,context)
@@ -337,7 +350,7 @@ export async function interpret(text:string,session:Session,context:Models,clien
     const selection=rule.selection;
     if (!("shop" in selection) && typeof result.shop==="string" && text.includes(result.shop) && menuShops.includes(result.shop)) selection.shop=result.shop;
     const dish=typeof result.dish==="string"?result.dish.trim():"";
-    if (!rule.mentionedDish && !selection.shop && !fallback && dish && dish.length<=32 && text.includes(dish)
+    if (!rule.mentionedDish && !selection.shop && !fallback && dish && dish.length<=32 && text.includes(dish) && !fastestDelivery.test(dish)
         && !genericFood.test(dish) && !menuShops.includes(dish) && !foods.includes(dish)) {
       const matches=menu.filter(item=>item.name.includes(dishAliases[dish]??dish));
       if (matches.length) {
@@ -347,12 +360,12 @@ export async function interpret(text:string,session:Session,context:Models,clien
       } else selection.unavailableDish=dish;
     }
     if (patch.flavor==="香辣" && !("noSpice" in selection) && /辣/.test(rule.meaning)) selection.noSpice=undefined;
-    const question=typeof result.question==="string"?result.question.slice(0,120).trim():"";
     const hasSelection=Object.keys(selection).length>0;
-    const canReply=!hasSelection&&!rule.question&&!rule.conflict&&!Object.keys(rule.patch).length&&!session.pending;
+    const wantsRecommendation=rule.newRequest||rule.alternatives||rule.anyChoice||
+      /^(?:请|帮我)?(?:推荐|找|挑|选)|^(?:吃什么|有啥好吃)/.test(rule.meaning);
+    const canReply=!wantsRecommendation&&!hasSelection&&!rule.question&&!rule.conflict&&!Object.keys(rule.patch).length&&!session.pending;
     const reply=fallback||(canReply&&typeof result.reply==="string"?result.reply.slice(0,300).trim():"");
     return {...base,selection,category:selection.category??rule.category,patch,reply,
-      question:rule.question || (Object.keys(patch).length||hasSelection||rule.mentionedDish||reply||question===session.pending?.question?"":question),
       newRequest:rule.newRequest||Boolean(result.newRequest===true&&(selection.shop||selection.preferredDish||selection.unavailableDish)),mode:"模型解析"};
   } catch {
     return {...base,mode:"规则解析 · 模型暂不可用"};
@@ -436,7 +449,11 @@ async function rank(session:Session, query:string, context:Models, fullMenu=fals
     const feedback=feedbackScore(session.feedback,dish,session.day);
     const explicit=(preference[0]*2+preference.slice(1).reduce((sum,x)=>sum+x,0))/6;
     return {id:dish.id,total:0.35*similarity(i+1)+0.35*explicit+0.15*historyScore+0.15*feedback,feedback};
-  }).sort((a,b)=>Number(preferredDishes.has(b.id))-Number(preferredDishes.has(a.id))||b.total-a.total||a.id.localeCompare(b.id));
+  });
+  const etaById=new Map(options.map(dish=>[dish.id,dish.eta]));
+  const prioritizeEta=session.selection?.orderBy==="eta";
+  scores.sort((a,b)=>(prioritizeEta?etaById.get(a.id)!-etaById.get(b.id)!:0)||
+    Number(preferredDishes.has(b.id))-Number(preferredDishes.has(a.id))||b.total-a.total||a.id.localeCompare(b.id));
   return {scores,orders:relevant.map(({order})=>({id:order.id,day:order.day,name:order.dish.name,flavor:order.dish.flavor,sample:order.sample})),
     menuMode:mode,orderMode:mode,excluded:menu.length-options.length};
 }
@@ -477,32 +494,28 @@ export async function choose(session:Session,context:Models,query="",seen:string
   const conditions=effective(session);
   let card:Card|null=null;
   if (dish) {
+    const selection=session.selection??{};
+    const speedReason=selection.orderBy==="eta"
+      ? `预计 ${dish.eta} 分钟送达，是${seen.length?"剩余":""}符合当前条件的${dish.category}中最快的。`
+      : "";
     const evidence=[
-      `「${dish.name}」菜单记录显示${dish.method}`,
-      dish.category!=="主食"?`菜单分类为「${dish.category}」`:dish.staple==="无"?"这份餐没有主食":`套餐包含${dish.staple}`,
-      ...(conditions.budget===null?[]:[`到手价 ¥${dish.price}，在 ¥${conditions.budget} 以内`]),
-      ...(conditions.servings?[`菜单标注 ${dish.servings} 人份`]:[]),
-      ...(conditions.maxEta?[`预计 ${dish.eta} 分钟送达`]:[]),
-      ...(dish.lowOil?["菜单标注少油"]:[]),
-      ...(conditions.flavor!=="不限"&&dish.flavor===conditions.flavor?[`口味符合你想吃的「${conditions.flavor}」`]:[])
+      ...(speedReason?[speedReason]:[]),
+      ...(selection.shop?[`来自你指定的「${dish.shop}」。`]:[]),
+      ...(selection.preferredDish&&dish.name.includes(selection.preferredDish)?[`菜名匹配你想吃的「${selection.preferredDish}」。`]:[]),
+      ...(conditions.maxEta?[`预计 ${dish.eta} 分钟送达，符合 ${conditions.maxEta} 分钟内的要求。`]:[]),
+      ...(conditions.budget!==null?[`模拟到手价 ¥${dish.price}，在当前 ¥${conditions.budget} 的预算内。`]:[]),
+      ...(conditions.servings?[`菜单标注 ${dish.servings} 人份，符合人数要求。`]:[]),
+      ...(selection.noSpice?["菜单口味和配料标签均未标注辣味。"]:selection.flavor===dish.flavor?[`符合「${dish.flavor}」口味要求。`]:[]),
+      ...(selection.ingredient?[`菜单配料包含「${selection.ingredient}」。`]:[]),
+      ...(selection.staple?[`符合${dish.staple==="无"?"不含主食":`搭配${dish.staple}`}的要求。`]:[]),
+      ...(selection.method?[`菜单烹饪方式为${dish.method}。`]:[]),
+      ...(selection.lowOil?["菜单标注少油。"]:[]),
+      ...(selection.noFry?["菜单烹饪方式为非油炸。"]:[]),
+      ...(conditions.avoid.length?[`模拟配料记录未列出当前忌口的${conditions.avoid.join("、")}。`]:[])
     ];
-    let sentence=dish.category!=="主食"?`这份${dish.category}是${dish.flavor}口味，模拟到手价 ¥${dish.price}。`:`这份是${dish.method}${dish.staple==="无"?"，没有主食":`，带${dish.staple}`}。${dish.flavor===conditions.flavor?`口味符合你想吃的「${conditions.flavor}」。`:""}`;
-    const matched=ranking.orders.filter(o=>o.flavor===dish.flavor);
-    if (matched[0] && dish.flavor===conditions.flavor) sentence+=`同品类的${matched[0].sample?"样例":"历史"}订单里有同口味的${matched[0].name}。`;
-    let reasonMode="事实模板";
-    if (context.key && query && !seen.length) {
-      try {
-        const facts=[...evidence,...matched.map(o=>`${o.sample?"样例":"历史"}订单在 ${o.day} 有同口味的「${o.name}」`)];
-        const result=await ask(context,"根据事实为午饭推荐选择最适合的两项。只输出 JSON 对象 {factIds:[数字]}，数字为提供的事实下标，不添加或改写事实。优先回答用户当前需求。",{query,facts},5000);
-        const ids=Array.isArray(result.factIds)?[...new Set(result.factIds)].slice(0,2):[];
-        if (ids.length && ids.every(id=>Number.isInteger(id)&&typeof id==="number"&&id>=0&&id<facts.length)) {
-          sentence=ids.map(id=>facts[id as number]).join("，")+"。";
-          reasonMode="检索增强 · 核验选据";
-        }
-      } catch {reasonMode="事实模板 · 降级";}
-    }
+    const sentence=evidence[0]??`这份${dish.category}是${dish.flavor}口味，模拟到手价 ¥${dish.price}。`;
     card={id:batchId,dish,conditions,reason:sentence,evidence,orders:ranking.orders,
-      mode:{intent:intentMode,menu:ranking.menuMode,orders:ranking.orderMode,reason:reasonMode},excluded:ranking.excluded};
+      mode:{intent:intentMode,menu:ranking.menuMode,orders:ranking.orderMode,reason:recommendationFactMode},excluded:ranking.excluded};
   }
   session.batch={id:batchId,query,seen,card};
   await setRanking(session,context,query,ordered,seen);

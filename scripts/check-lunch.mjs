@@ -214,7 +214,7 @@ try {
       assert(card(s).dish.price<=25);
       assert(card(s).mode.intent.includes("暂不可用"));
       assert(card(s).mode.menu.includes("降级"));
-      assert(card(s).mode.reason.includes("降级"));
+      assert.equal(card(s).mode.reason,"菜单与推荐排序");
     } finally {globalThis.fetch=prior;}
   });
   await check("替身语音服务返回转写文本，校验服务端文件上传协议",async()=>{
@@ -501,27 +501,58 @@ try {
     assert.equal(effective(s).flavor,"鲜香");
     assert.equal(s.orders,orders);
   });
-  await check("默认百炼路径使用检索证据，模型越界选据不进入说明",async()=>{
-    const original=globalThis.fetch;
-    let selected=[0,2];
-    globalThis.fetch=async (_url,options)=>{
-      const request=JSON.parse(options.body);
-      const input=JSON.parse(request.messages.at(-1).content[0].text);
-      const result=input.facts?{factIds:selected}:{patch:{flavor:"香辣"}};
-      if (input.facts) assert(input.facts.every(fact=>typeof fact==="string"));
-      return new Response("data: "+JSON.stringify({choices:[{delta:{content:JSON.stringify(result)}}]})+"\n\ndata: [DONE]\n\n");
-    };
+  await check("最快送达先过滤确定的条件，再按菜单 ETA 排序，换菜保留速度优先",async()=>{
+    const s=await freshen(seed(),local);
+    const prior=globalThis.fetch;
+    globalThis.fetch=async()=>Response.json({choices:[{message:{content:JSON.stringify({
+      question:"你想要哪个餐馆？",reply:"你想要哪个餐馆？",dish:"最快送到"
+    })}}]});
     try {
-      const model=models({LUNCH_DEFAULT_BAILIAN_KEY:"fixture-default"});
-      assert.equal(model.vector,"");
-      const s=await start();
-      await applyAction(s,model,"messages",{text:"今天想吃一点辣的面条"});
-      assert.equal(card(s).mode.reason,"检索增强 · 核验选据");
-      assert(card(s).reason.includes(card(s).evidence[0]));
-      selected=[999];
-      await applyAction(s,model,"messages",{text:"今天想吃一点辣的面条"});
-      assert.equal(card(s).mode.reason,"事实模板");
-    } finally {globalThis.fetch=original;}
+      await applyAction(s,personalModels("fixture","qwen-flash"),"messages",{text:"给我最快送到的，24元以内"});
+    } finally {globalThis.fetch=prior;}
+    assert.equal(s.pending,null);
+    const candidates=menu.filter(dish=>eligible(s,dish)).sort((a,b)=>a.eta-b.eta);
+    assert.equal(card(s).dish.eta,candidates[0].eta);
+    assert(card(s).dish.price<=24);
+    assert.match(card(s).reason,new RegExp(`预计 ${candidates[0].eta} 分钟.*最快`));
+    const etas=s.ranking.ids.slice(0,s.ranking.matchCount).map(id=>menu.find(dish=>dish.id===id).eta);
+    assert.deepEqual(etas,candidates.slice(0,10).map(dish=>dish.eta));
+    await send(s,"随便");
+    assert.equal(card(s).dish.eta,candidates[0].eta);
+    const skipped=card(s).dish.id;
+    await send(s,"换一道");
+    assert.notEqual(card(s).dish.id,skipped);
+    assert.equal(card(s).dish.eta,candidates[1].eta);
+    assert.match(card(s).reason,/剩余.*最快/);
+  });
+  await check("旧会话被追问餐馆时回复随便，恢复最快送达意图",async()=>{
+    const s=await freshen(seed(),local);
+    s.messages=[
+      {role:"user",text:"给我最快送到的",id:"user"},
+      {role:"assistant",text:"你想要哪个餐馆？",id:"assistant"},
+    ];
+    s.pending={patch:{},question:s.messages[1].text};
+    await send(s,"随便");
+    assert.equal(s.pending,null);
+    assert.equal(s.selection.shop,undefined);
+    assert.equal(card(s).dish.eta,Math.min(...menu.filter(dish=>eligible(s,dish)).map(dish=>dish.eta)));
+  });
+  await check("普通推荐忽略模型的可选条件追问，必要的澄清仍可保留",async()=>{
+    const s=await freshen(seed(),local);
+    await applyAction(s,local,"messages",{text:"随便推荐一个午餐",modelResult:{question:"请提供餐馆和预算。",reply:"哪家餐馆？"}});
+    assert.equal(s.pending,null);
+    assert(card(s));
+    await send(s,"不加松露");
+    assert.match(s.pending.question,/忌口/);
+  });
+  await check("推荐说明直接使用已执行的排序和菜单条件，样例订单不出现在说明中",async()=>{
+    const s=await send(await start(),"今天想吃一点辣的面条，25元以内");
+    assert.equal(card(s).mode.reason,"菜单与推荐排序");
+    assert(card(s).evidence.some(fact=>fact.includes("香辣")));
+    assert(card(s).evidence.some(fact=>fact.includes("¥25")));
+    assert(card(s).evidence.some(fact=>fact.includes("搭配面")));
+    assert(!card(s).evidence.join("").includes("订单"));
+    assert(!card(s).reason.includes("订单"));
   });
   await check("人数与预计送达时间同时参与推荐、榜单和下单，保留忌口",async()=>{
     const s=await freshen(seed(),local);

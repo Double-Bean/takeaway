@@ -8,7 +8,7 @@ import type { PersonalModelId } from "@/lib/lunch-byok";
 import { LunchApiSettings } from "@/components/lunch-api-settings";
 import { isLegacyDailyPreview } from "@/lib/lunch-actions";
 import { toSpeechWav } from "@/lib/lunch-audio";
-import { activeCategory, categoryPreference, effective, requestInterpretation, uuid } from "@/lib/lunch-engine";
+import { activeCategory, categoryPreference, effective, recommendationFactMode, requestInterpretation, uuid } from "@/lib/lunch-engine";
 import { timeoutSignal } from "@/lib/lunch-network";
 import { ask, connectionError, personalModels, transcribe, type Models } from "@/lib/lunch-models";
 
@@ -141,7 +141,7 @@ function DishCard({card,active,onOrder,onNext,onEvidence,busy}:{card:Card;active
       </div>
     </div>
     <div className="dish-reason">
-      <p>{card.reason}</p>
+      <p>{card.mode.reason===recommendationFactMode?card.reason:`预计 ${dish.eta} 分钟送达，模拟到手价 ¥${displayPrice(dish.price)}。`}</p>
       <button className="reason-btn" onClick={onEvidence}>为什么推荐 <ChevronDown size={15}/></button>
     </div>
     {active&&<div className="card-actions">
@@ -521,12 +521,10 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
         <div className="drawer-actions"><button className="secondary" onClick={()=>setPanel(null)}>继续打字</button><button className="primary" onClick={()=>{microphoneConsent.current=true;void beginVoice();}}>继续录音</button></div>
       </>}
       {panel==="evidence"&&selected&&<>
-        <div className="evidence-section"><h3>菜品详情</h3><p>{selected.dish.method} · {selected.dish.flavor} · {dishById(selected.dish.id)?.portion??"1 份"}</p>
+        <div className="evidence-section"><h3>菜品详情</h3><p>{selected.dish.shop} · 预计 {selected.dish.eta} 分钟 · ¥{displayPrice(selected.dish.price)}</p><p>{selected.dish.method} · {selected.dish.flavor} · {dishById(selected.dish.id)?.portion??"1 份"}</p>
           <p>{selected.dish.ingredients.includes("?")?"模拟配料待确认":"模拟配料 · "+selected.dish.ingredients.join("、")}</p></div>
-        <div className="evidence-section"><h3>菜单与条件</h3>{selected.evidence.map(fact=><p key={fact}><Check size={15}/>{fact}</p>)}<small>已排除 {selected.excluded} 个不满足硬条件的菜单条目</small></div>
-        <div className="evidence-section"><h3>相关历史订单</h3>{selected.orders.length?selected.orders.map(o=><p className="order-evidence" key={o.id}><span>{o.name} · {o.flavor}{o.sample?" · 样例":""}</span><small>{o.day}</small></p>):<p>这次没有匹配到相关历史订单。</p>}</div>
-        <div className="mode-list"><span>需求 · {selected.mode.intent}</span><span>菜品 · {selected.mode.menu}</span><span>订单 · {selected.mode.orders}</span><span>理由 · {selected.mode.reason}</span></div>
-        {rankedDishes.length>0&&<button className="secondary proposal" onClick={()=>setPanel("compare")}>查看本轮排序</button>}
+        {selected.mode.reason===recommendationFactMode&&selected.evidence.length>0&&<div className="evidence-section"><h3>符合的条件</h3>{selected.evidence.map(fact=><p key={fact}><Check size={15}/>{fact}</p>)}</div>}
+        {rankedDishes.length>0&&selected.id===current?.id&&selected.dish.id===current.dish.id&&<button className="secondary proposal" onClick={()=>setPanel("compare")}>查看本轮排序</button>}
       </>}
       {panel==="confirm"&&selected&&<>
         <div className="confirmation"><DishVisual dish={selected.dish}/><div><strong>{selected.dish.name}</strong><p>{selected.dish.shop} · {selected.dish.eta} 分钟 · {dishById(selected.dish.id)?.portion??"1 份"}</p></div><strong>¥{selected.dish.price}</strong></div>

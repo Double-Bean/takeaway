@@ -3,7 +3,7 @@ import type { Category, Dish, Flavor, Staple } from "./lunch-data";
 export type Pref = { budget:number|null; target:number|null; flavor:Flavor; staple:Staple; avoid:string[]; lowOil:boolean; noFry:boolean; servings?:number|null; maxEta?:number|null };
 export type Selection = {
   category?:Category; flavor?:Exclude<Flavor,"不限">; staple?:Dish["staple"]; preferredStaple?:Dish["staple"]; ingredient?:string; dishIds?:string[]; requestedDish?:string; method?:Dish["method"];
-  shop?:string; preferredDish?:string; unavailableDish?:string;
+  shop?:string; preferredDish?:string; unavailableDish?:string; orderBy?:"eta";
   lowOil?:true; noFry?:true; noSpice?:true; meatless?:true;
 };
 export type Order = { id:string; dish:Dish; day:string; sample?:boolean; batchId?:string };

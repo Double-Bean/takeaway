@@ -40,7 +40,7 @@ function noResult(session:Session) {
 }
 function mergeSelection(current:Selection, incoming:Selection) {
   if(incoming.category && incoming.category!==(current.category??"主食")) {
-    return {shop:current.shop,...incoming};
+    return {shop:current.shop,orderBy:current.orderBy,...incoming};
   }
   const selection={...current,...incoming};
   if ("staple" in incoming && !("preferredStaple" in incoming)) delete selection.preferredStaple;
