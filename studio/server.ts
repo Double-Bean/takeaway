@@ -73,12 +73,27 @@ async function serveApi(request:IncomingMessage,response:ServerResponse,url:URL)
   await send(response,await api(new Request(url,{method:request.method,headers,body}),path));
 }
 
-async function serve(request:IncomingMessage,response:ServerResponse) {
-  const forwardedProtocol=request.headers["x-forwarded-proto"];
-  const scheme=process.env.STUDIO_HOST||forwardedProtocol==="https"?"https":"http";
+function requestOrigin(request:IncomingMessage) {
+  const studioHost=process.env.STUDIO_HOST?.trim();
+  if(studioHost) return new URL(studioHost.includes("://")?studioHost:`https://${studioHost}`).origin;
+
+  // The Studio proxy may replace the host with an internal address. Fetch
+  // Metadata is browser-controlled and only marks same-origin browser requests.
+  const browserOrigin=request.headers.origin;
+  if(request.headers["sec-fetch-site"]==="same-origin" && typeof browserOrigin==="string") {
+    const origin=new URL(browserOrigin);
+    if(origin.protocol==="https:" && origin.hostname.endsWith(".ms.show") && origin.origin===browserOrigin) return browserOrigin;
+  }
+
+  const protocol=request.headers["x-forwarded-proto"];
+  const scheme=typeof protocol==="string" && protocol.split(",")[0].trim()==="https"?"https":"http";
   const forwardedHost=request.headers["x-forwarded-host"];
-  const host=typeof forwardedHost==="string"?forwardedHost:request.headers.host||"localhost";
-  const url=new URL(`${scheme}://${host}`);
+  const host=typeof forwardedHost==="string"?forwardedHost.split(",")[0].trim():request.headers.host||"localhost";
+  return new URL(`${scheme}://${host}`).origin;
+}
+
+async function serve(request:IncomingMessage,response:ServerResponse) {
+  const url=new URL(requestOrigin(request));
   const target=new URL(request.url||"/","http://localhost");
   url.pathname=target.pathname;
   url.search=target.search;
