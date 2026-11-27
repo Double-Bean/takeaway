@@ -1,6 +1,6 @@
 import { feedbackReasons, flavors, foods, menu, samplePrompts, staples, type Category, type Dish } from "./lunch-data";
 import { ask, embeddings, type Models } from "./lunch-models";
-import type { Card, Comparison, Feedback, Pref, Score, Selection, Session } from "./lunch-types";
+import type { Card, Comparison, Feedback, MealStaple, Pref, Score, Selection, Session } from "./lunch-types";
 
 export const defaults:Pref = {budget:30,target:null,flavor:"清淡",staple:"优先有主食",avoid:["花生"],lowOil:true,noFry:true};
 const todayFormat = new Intl.DateTimeFormat("sv-SE",{timeZone:"Asia/Shanghai"});
@@ -36,7 +36,9 @@ export function categoryPreference(session:Session, category:Category):Pref {
 
 export function effective(session:Session,category=activeCategory(session),today=session.today):Pref {
   const stored=categoryPreference(session,category);
-  return {...stored,...today,avoid:[...new Set([...session.profile.avoid,...(today.avoid??[])])]};
+  const result={...stored,...today,avoid:[...new Set([...session.profile.avoid,...(today.avoid??[])])]};
+  if (result.staple==="优先米饭" && result.excludedStaples?.includes("米饭")) result.staple="优先有主食";
+  return result;
 }
 
 function startsRequest(query:string,session:Session,category?:Category) {
@@ -99,8 +101,27 @@ const dishAliases:Record<string,string>={"天妇罗虾":"炸虾天妇罗","炸�
 const genericMeats:Record<string,string>={"鱼肉":"鱼"};
 const genericFood=/^(?:午饭|午餐|正餐|主食|饭|米饭|盖饭|配饭|杂粮|面|面条|汤面|米线|面食|炒面|拌面|甜点|甜品|甜的|零食|小吃|蔬菜|素菜|素食|配菜|水果|果盘|果切|好吃的|吃的|什么|东西|都行|随便|换一道|一道菜|肉|荤菜|菜|今天的推荐)$/;
 const cookingMethods=new Set(menu.map(dish=>dish.method));
-const riceExclusion=/(?:不(?:再)?想(?:要|吃)?|不(?:要|吃|能吃|用|加|带)|别(?:给我|吃|加|带|推荐)|去掉)(?:再|吃|加|带)?(?:米饭|白饭|盖饭|配饭)|不(?:含米饭|配饭)/g;
-const riceAllowed=/(?:米饭|白饭)(?:现在)?(?:也可以|也行|都行)|(?:也)?可以吃(?:米饭|白饭)(?:了|$|[，。；！？])/;
+const riceWords="米饭|白米饭|大米饭|白饭|盖饭|配饭";
+const grainWords="杂粮饭|粗粮饭|杂粮碗|杂粮|粗粮";
+const noodleWords="面条|汤面|米线|面食|炒面|拌面|意大利面|面(?=$|[和跟与及或、，,。；;！？!?]|以及|还有|都|也|了|吧|呢|就|但)";
+const stapleWord=`(?:${riceWords}|${grainWords}|${noodleWords})`;
+const stapleList=`${stapleWord}(?:(?:以及|还有|或者|[和跟与及或、])${stapleWord})*`;
+const stapleNegation=new RegExp(
+  `(?:不(?:再)?想(?:要|吃)?|不(?:要|吃|能吃|用|加|带|含|配)|别(?:给我|吃|加|带|推荐)|去掉|避开|排除)(?:再|吃|加|带)?(${stapleList})|(${stapleList})(?:都|也)(?:不想吃|不吃|不要)|不配饭`, "g"
+);
+const stapleRestoration=new RegExp(`(${stapleWord})(?:现在)?(?:也可以|也行|都行)|(?:也)?可以吃(${stapleWord})(?:了|$|[，,。；;！？!?])`, "g");
+const riceStaple=new RegExp(`^(?:${riceWords})$`);
+const grainStaple=new RegExp(`^(?:${grainWords})$`);
+const toStaple=(word:string):MealStaple=>riceStaple.test(word)?"米饭":grainStaple.test(word)?"杂粮":"面";
+
+export function stapleExclusionsLabel(excluded:readonly MealStaple[]) {
+  return "不含"+excluded.map(staple=>staple==="面"?"面食":staple).join("、");
+}
+
+function allowsStaple(preference:Pref,dish:Dish) {
+  return dish.staple==="无" || (!preference.excludedStaples?.includes(dish.staple) &&
+    (preference.staple!=="不含米饭" || dish.staple!=="米饭"));
+}
 
 function dishRequest(query:string,category:Category):{selection:Selection; name?:string; ids?:string[]}|undefined {
   const direct=query.match(/(?:^|[，,。；！？])(?:我)?(?:今天|这次|现在|中午|午休|午饭|还是)*(?:(?:想|要)吃|想来|来|给我|推荐|改吃|换成|改成|有没有|有没|有(?=[^，。！？]+[吗么][？?]?$))([^，,。；！？]+)/)?.[1];
@@ -221,14 +242,21 @@ export function ruleIntent(text:string,session:Session) {
     selection.flavor=undefined;
     selection.noSpice=undefined;
   }
-  const stapleQuery=query.replace(riceExclusion,"");
-  const excludesRice=stapleQuery!==query;
+  const excludedStaples=new Set<MealStaple>();
+  const stapleQuery=query.replace(stapleNegation,(_negative,before:string,after:string)=>{
+    const names=(before??after??"配饭").match(new RegExp(stapleWord,"g"))??[];
+    for (const name of names) excludedStaples.add(toStaple(name));
+    return "";
+  });
+  const restoredStaples=new Set(Array.from(stapleQuery.matchAll(stapleRestoration),
+    ([,before,after])=>toStaple(before??after)));
+  const clearsStaple=/主食不限|主食随意|取消主食限制/.test(stapleQuery);
   if (/不要主食|无主食|不吃主食/.test(query)) {
     patch.staple="无主食";
     selection.staple="无";
-  } else if (/米饭|白饭|盖饭|配饭/.test(stapleQuery)) patch.staple=riceAllowed.test(stapleQuery)?"不限":"优先米饭";
+  } else if (new RegExp(riceWords).test(stapleQuery)) patch.staple=restoredStaples.has("米饭")?"不限":"优先米饭";
   else if (/有主食|带主食/.test(query)) patch.staple="优先有主食";
-  const mainFood=stapleQuery.replace(/(?:不要|不吃|不想吃|不加|别推荐)(?:吃)?(?:面条|汤面|米线|面食|炒面|拌面|米饭|杂粮|面)/g,"");
+  const mainFood=stapleQuery.replace(stapleRestoration,"");
   if (/(?:必须|一定要|只吃|就要|改吃|改成|换成|还是要)(?:吃|有|带)?(?:米饭|白饭|盖饭|配饭)/.test(mainFood)) selection.staple="米饭";
   else if (/面条|汤面|米线|面食|炒面|拌面|来碗面|(?:吃|的|一碗)面(?:$|[，。！？])/.test(mainFood)) {
     if (/(?:最好|优先|偏向|尽量)[^，。；]{0,6}(?:面条|汤面|米线|面食|炒面|拌面)/.test(mainFood)) {
@@ -236,7 +264,7 @@ export function ruleIntent(text:string,session:Session) {
       selection.preferredStaple="面";
     } else selection.staple="面";
     patch.staple="不限";
-  } else if (/(?:想吃|要吃|只吃|来[碗份])(?:点|个)?杂粮/.test(mainFood)) selection.staple="杂粮";
+  } else if (/(?:想吃|要吃|只吃|来[碗份]|改吃|改成|换成|还是要)(?:点|个)?(?:杂粮|粗粮)/.test(mainFood)) selection.staple="杂粮";
   if (/少油|不油腻/.test(query)) {
     patch.lowOil=true;
     selection.lowOil=/(?:优先|最好|尽量)[^，。；]{0,6}(?:少油|不油腻)/.test(query)?undefined:true;
@@ -250,7 +278,7 @@ export function ruleIntent(text:string,session:Session) {
   if (/吃素|素食|不要肉|不吃肉|不要荤|不吃荤/.test(query)) selection.meatless=true;
   if (/可以吃肉|肉也可以|不用吃素/.test(query)) selection.meatless=undefined;
   if (selection.meatless) selection.ingredient=undefined;
-  if (/主食不限|主食随意|取消主食限制/.test(query)) {
+  if (clearsStaple) {
     patch.staple="不限";selection.staple=undefined;selection.preferredStaple=undefined;
   }
   const requestedCategory=(shop?stapleQuery.replaceAll(shop,""):stapleQuery).replace(/(?:不要|不吃|不想吃|别推荐|别加)(?:吃)?(?:主食|甜点|甜品|零食|小吃|蔬菜|水果|米饭)/g,"");
@@ -268,7 +296,7 @@ export function ruleIntent(text:string,session:Session) {
     selection.ingredient=positiveIngredient;
     if (!selection.category && ["芒果","草莓","香蕉","苹果","菠萝","西瓜","橙子","蓝莓","奇异果","牛油果","葡萄"].includes(positiveIngredient)) selection.category="水果";
   }
-  const dish=dishRequest(query,selection.category??activeCategory(session));
+  const dish=dishRequest(stapleQuery,selection.category??activeCategory(session));
   Object.assign(selection,dish?.selection);
   if(dish?.ids?.length) {
     selection.preferredDish=dish.name;
@@ -299,19 +327,31 @@ export function ruleIntent(text:string,session:Session) {
       historical=source.id;
     } else question="没查到对应的订单。你还记得大概是什么口味吗？";
   }
-  if (excludesRice && patch.staple!=="无主食") {
-    patch.staple="不含米饭";
-    if (!selection.staple || selection.staple==="米饭") selection.staple=undefined;
-  } else if (riceAllowed.test(stapleQuery) || patch.staple==="优先米饭" && !selection.staple) {
-    selection.staple=undefined;
+  const previousSelection=session.pending?.selection??session.selection;
+  if (selection.staple && selection.staple!=="无" && !excludedStaples.has(selection.staple)) {
+    restoredStaples.add(selection.staple);
+  }
+  if (selection.preferredStaple && selection.preferredStaple!=="无") restoredStaples.add(selection.preferredStaple);
+  if (patch.staple==="优先米饭") restoredStaples.add("米饭");
+  if (selection.staple && selection.staple!=="无" && excludedStaples.has(selection.staple) ||
+      !selection.staple && previousSelection?.staple && previousSelection.staple!=="无" && excludedStaples.has(previousSelection.staple) ||
+      !selection.staple && (patch.staple==="优先米饭" || restoredStaples.size)) selection.staple=undefined;
+  if (selection.preferredStaple && selection.preferredStaple!=="无" && excludedStaples.has(selection.preferredStaple) ||
+      !selection.preferredStaple && previousSelection?.preferredStaple && previousSelection.preferredStaple!=="无" && excludedStaples.has(previousSelection.preferredStaple)) {
+    selection.preferredStaple=undefined;
   }
   const changesStaple=Boolean(selection.staple && session.selection?.staple &&
     selection.staple!==session.selection.staple);
   const contextCategory=session.pending?.selection?.category??activeCategory(session);
-  const continuation=Boolean(previousShop || shopRevision || relaxShop || anyChoice || selection.orderBy || /^(?:那|这家|上一份|刚才|再|也|它|这道|这个|能不能|有没有)/.test(query) || alternatives);
+  const continuation=Boolean(excludedStaples.size || previousShop || shopRevision || relaxShop || anyChoice || selection.orderBy || /^(?:那|这家|上一份|刚才|再|也|它|这道|这个|能不能|有没有)/.test(query) || alternatives);
   const newRequest=isHistorical || (!shopRevision&&selection.category!==undefined&&selection.category!==contextCategory) ||
     (!revising&&!continuation&&(changesStaple||startsRequest(query,session,selection.category)));
   const category=selection.category??(newRequest?"主食":session.pending?.selection?.category??activeCategory(session));
+  const current=session.pending?.patch.excludedStaples??session.today.excludedStaples??[];
+  if (clearsStaple || excludedStaples.size || !newRequest && current.some(staple=>restoredStaples.has(staple))) {
+    const retained=clearsStaple||newRequest?[]:current.filter(staple=>!restoredStaples.has(staple));
+    patch.excludedStaples=[...new Set([...retained,...excludedStaples])];
+  }
   const ongoing=effective(session,category,newRequest?{}:session.today);
   if (/再便宜|更便宜|便宜点|便宜一点|便宜些/.test(query) && !price && !manualPrice) {
     const reference=newRequest?undefined:session.batch?.card?.dish.price;
@@ -326,19 +366,19 @@ export function ruleIntent(text:string,session:Session) {
     selection.unavailableDish=undefined;
   }
   const longTerm=/以后|长期|今后|从今往后|一直不吃/.test(query);
-  const unknownAvoid = !patch.avoid?.length && [...query.matchAll(/(?:别放|不加|忌口是|不吃)([\p{Script=Han}]{1,10})/gu)]
+  const unknownAvoid = !patch.avoid?.length && [...stapleQuery.matchAll(/(?:别放|不加|忌口是|不吃)([\p{Script=Han}]{1,10})/gu)]
     .some(([,food])=>!shopRevision||!(/^(?:这家|那家)/.test(food)||menuShops.some(name=>food.startsWith(name))));
-  if (unknownAvoid && !excludesRice && !/不吃(?:炸|主食|米饭|油炸|肉|荤|辣)/.test(query)) question ||= "这项忌口没有匹配菜单食材标签。请在「我的偏好」确认食材后再推荐。";
+  if (unknownAvoid && !/不吃(?:炸|主食|米饭|油炸|肉|荤|辣)/.test(query)) question ||= "这项忌口没有匹配菜单食材标签。请在「我的偏好」确认食材后再推荐。";
   if (anyChoice && session.pending?.question.includes("忌口没有匹配")) question=session.pending.question;
   if (/^(?:我)?(?:改主意了|反悔了?|算了(?:吧)?)[。！!？?]*$/.test(raw)) question="想改哪一项？可以直接告诉我新的口味、主食或预算。";
-  return {patch,selection,category,newRequest,question,conflict,historical,longTerm,restoreAvoid,meaning:query,mentionedDish:dish?.name,alternatives,anyChoice,shopRevision};
+  return {patch,selection,category,newRequest,question,conflict,historical,longTerm,restoreAvoid,meaning:query,mentionedDish:dish?.name,alternatives,anyChoice,shopRevision,stapleQuery};
 }
 
 export function requestInterpretation(text:string,session:Session,context:Models) {
   const rule=ruleIntent(text,session);
   const current=session.batch?.card?.dish;
   return ask(context,
-    "你是中文午餐助手。只输出 JSON {patch,reply,dish,shop,newRequest}，省略不用的字段。最新消息是本轮输入，结合近期对话、当前条件和待澄清问题理解指代与省略。patch 仅含用户明确新增或修改的 budget、target、flavor、staple、avoid、lowOil、noFry。dish 只填明确要求的具体菜名，可以不在菜单中。泛指食材、口味、餐厅或菜品类别时留空。shop 只填菜单餐厅中的指定店名。明确要换一个全新的餐饮需求才填 newRequest:true。对当前菜品的价格、食材等问题按给出的菜品事实用 reply 回答。闲聊或询问使用方法也可以用 reply。推荐或修改条件走 patch 等结构化字段，不在 reply 里编造菜、库存、价格或订单。餐厅、口味、预算等可选条件缺失时直接进入推荐流程，省略相应字段。最快送达是排序要求，省略 reply 和 dish。换家店是对当前推荐的调整，不能把「别家」「其他家的」填成菜名或设为全新的需求。菜单及忌口以系统核验为准。",
+    "你是中文午餐助手。只输出 JSON {patch,reply,dish,shop,newRequest}，省略不用的字段。最新消息是本轮输入，优先于旧偏好。否定词可修饰并列食物，例如「不吃杂粮饭和米饭」表示两项都排除。不要把被否定的菜名填入 dish，也不要生成肯定偏好。结合近期对话、当前条件和待澄清问题理解指代与省略。patch 仅含用户明确新增或修改的 budget、target、flavor、staple、avoid、lowOil、noFry。dish 只填明确要求的具体菜名，可以不在菜单中。泛指食材、口味、餐厅或菜品类别时留空。shop 只填菜单餐厅中的指定店名。明确要换一个全新的餐饮需求才填 newRequest:true。对当前菜品的价格、食材等问题按给出的菜品事实用 reply 回答。闲聊或询问使用方法也可以用 reply。推荐或修改条件走 patch 等结构化字段，不在 reply 里编造菜、库存、价格或订单。餐厅、口味、预算等可选条件缺失时直接进入推荐流程，省略相应字段。最快送达是排序要求，省略 reply 和 dish。换家店是对当前推荐的调整，不能把「别家」「其他家的」填成菜名或设为全新的需求。菜单及忌口以系统核验为准。",
     {text,history:session.messages.filter((_,i)=>i!==session.messages.length-1||session.messages[i].role!=="user"||session.messages[i].text!==text).slice(-10).map(({role,text,card})=>({role,text,...(card?{dish:card.dish.name}:{})})),
       category:rule.category,conditions:effective(session),selection:session.selection,pending:session.pending,
       dish:current&&{name:current.name,shop:current.shop,price:current.price,eta:current.eta,ingredients:current.ingredients,flavor:current.flavor,method:current.method,staple:current.staple,servings:current.servings},
@@ -375,14 +415,15 @@ export async function interpret(text:string,session:Session,context:Models,clien
     delete proposal.servings;
     delete proposal.maxEta;
     if (!("avoid" in rule.patch)) delete proposal.avoid;
-    if (proposal.staple==="不含米饭" || effective(session).staple==="不含米饭" ||
+    if (proposal.staple==="不含米饭" || rule.patch.excludedStaples || effective(session).excludedStaples?.length ||
+      effective(session).staple==="不含米饭" ||
       !/主食|米饭|配饭|面条|杂粮/.test(rule.meaning)) delete proposal.staple;
     if (!/便宜|价格|预算|元|块/.test(rule.meaning)) delete proposal.target;
     const patch={...proposal,...rule.patch};
     const selection=rule.selection;
     if (!("shop" in selection) && typeof result.shop==="string" && text.includes(result.shop) && menuShops.includes(result.shop)) selection.shop=result.shop;
     const dish=typeof result.dish==="string"?result.dish.trim():"";
-    if (rule.patch.staple!=="不含米饭" && !rule.mentionedDish && !selection.shop && !fallback && dish && dish.length<=32 && text.includes(dish) && !fastestDelivery.test(dish)
+    if (!rule.mentionedDish && !selection.shop && !fallback && dish && dish.length<=32 && rule.stapleQuery.includes(dish) && !fastestDelivery.test(dish)
         && (!rule.shopRevision || menu.some(item=>item.name.includes(dishAliases[dish]??dish)))
         && !genericFood.test(dish) && !menuShops.includes(dish) && !foods.includes(dish)) {
       const matches=menu.filter(item=>item.name.includes(dishAliases[dish]??dish));
@@ -399,7 +440,7 @@ export async function interpret(text:string,session:Session,context:Models,clien
     const canReply=!wantsRecommendation&&!hasSelection&&!rule.question&&!rule.conflict&&!Object.keys(rule.patch).length&&!session.pending;
     const reply=fallback||(canReply&&typeof result.reply==="string"?result.reply.slice(0,300).trim():"");
     return {...base,selection,category:selection.category??rule.category,patch,reply,
-      newRequest:rule.newRequest||Boolean(!rule.shopRevision&&result.newRequest===true&&(selection.shop||selection.preferredDish||selection.unavailableDish)),mode:"模型解析"};
+      newRequest:rule.newRequest||Boolean(!rule.shopRevision&&!rule.patch.excludedStaples&&!effective(session).excludedStaples?.length&&result.newRequest===true&&(selection.shop||selection.preferredDish||selection.unavailableDish)),mode:"模型解析"};
   } catch {
     return {...base,mode:"规则解析 · 模型暂不可用"};
   }
@@ -421,7 +462,7 @@ export function eligible(session:Session,dish:Dish,blockedMains=yesterdayMains(s
   const meat=["牛肉","猪肉","鸡肉","羊肉","鸭肉","鱼","虾","贝类","鱿鱼"];
   return !selection.unavailableDish && (!selection.shop || dish.shop===selection.shop) && !selection.excludedShops?.includes(dish.shop) && dish.category===category && (!selection.flavor || dish.flavor===selection.flavor)
     && (!selection.noSpice || dish.flavor!=="香辣" && !dish.ingredients.includes("辣椒"))
-    && (p.staple!=="不含米饭" || dish.staple!=="米饭")
+    && allowsStaple(p,dish)
     && (!selection.staple || dish.staple===selection.staple)
     && (!selection.ingredient || dish.ingredients.includes(selection.ingredient))
     && (!selection.method || dish.method===selection.method)
@@ -458,7 +499,7 @@ async function rank(session:Session, query:string, context:Models, fullMenu=fals
   const p=effective(session);
   const blockedMains=yesterdayMains(session);
   const options=menu.filter(dish=>fullMenu
-    ? inService(dish,blockedMains) && (p.staple!=="不含米饭" || dish.staple!=="米饭")
+    ? inService(dish,blockedMains) && allowsStaple(p,dish)
     : eligible(session,dish,blockedMains));
   const history=session.orders.filter(o=>o.dish.category===activeCategory(session)&&o.day>=moveDay(session.day,-30)&&o.day<=session.day);
   const queryText=[query, activeCategory(session), session.selection?.staple??session.selection?.preferredStaple, p.flavor==="不限"?"":p.flavor,p.staple,p.lowOil?"少油":"",p.noFry?"清蒸 炖煮":""].filter(Boolean).join(" ");
@@ -544,6 +585,7 @@ export async function choose(session:Session,context:Models,query="",seen:string
       ...(conditions.servings?[`菜单标注 ${dish.servings} 人份，符合人数要求。`]:[]),
       ...(selection.noSpice?["菜单口味和配料标签均未标注辣味。"]:selection.flavor===dish.flavor?[`符合「${dish.flavor}」口味要求。`]:[]),
       ...(selection.ingredient?[`菜单配料包含「${selection.ingredient}」。`]:[]),
+      ...(conditions.excludedStaples?.length?[stapleExclusionsLabel(conditions.excludedStaples)+"。"]:[]),
       ...(selection.staple?[`符合${dish.staple==="无"?"不含主食":`搭配${dish.staple}`}的要求。`]:[]),
       ...(selection.method?[`菜单烹饪方式为${dish.method}。`]:[]),
       ...(selection.lowOil?["菜单标注少油。"]:[]),

@@ -1,5 +1,5 @@
 import { categories, dishById, feedbackReasons, menu } from "./lunch-data";
-import { activeCategory, categoryPreference, choose, compareFeedback, dayAt, effective, eligible, refreshRanking, interpret, seed, uuid, validPatch } from "./lunch-engine";
+import { activeCategory, categoryPreference, choose, compareFeedback, dayAt, effective, eligible, refreshRanking, interpret, seed, stapleExclusionsLabel, uuid, validPatch } from "./lunch-engine";
 import type { Models } from "./lunch-models";
 import type { Message, Pref, Selection, Session } from "./lunch-types";
 
@@ -16,7 +16,7 @@ function add(session:Session, message:Omit<Message,"id">) {
 function noResult(session:Session) {
   const selection=session.selection??{};
   const category=activeCategory(session);
-  const {budget,avoid,servings,maxEta,staple}=effective(session);
+  const {budget,avoid,servings,maxEta,staple,excludedStaples}=effective(session);
   if (selection.unavailableDish) return `菜单里没有「${selection.unavailableDish}」，暂无符合条件的菜品。想看看其他菜，可以直接告诉我。`;
   const labels=[
     selection.shop,
@@ -25,7 +25,7 @@ function noResult(session:Session) {
     selection.ingredient?"含"+selection.ingredient:undefined,
     selection.method,
     selection.staple==="无"?"不含主食":selection.staple?"含"+selection.staple:undefined,
-    staple==="不含米饭"?staple:undefined,
+    excludedStaples?.length?stapleExclusionsLabel(excludedStaples):staple==="不含米饭"?staple:undefined,
     selection.lowOil?"少油":undefined,
     selection.noFry?"非油炸":undefined,
     selection.meatless?"不含肉类":undefined,
@@ -179,8 +179,9 @@ export async function applyAction(session:Session,models:Models,path:string,body
       if(interpreted.alternatives) delete session.selection.preferredDish;
       const reference=session.orders.find(o=>o.id===interpreted.historical);
       await recommend(session,models,text,reference ? `查到${reference.sample?"样例订单":"历史订单"}里的${reference.dish.name}。我按相近口味另挑了一道。` : interpreted.shopRevision ? "换了家店，看看这份。" : "按你刚才的要求，我找到了这份。",interpreted.mode);
-      if (interpreted.longTerm && Object.keys(interpreted.patch).length) {
-        add(session,{role:"assistant",text:"可以把本句提到的改动保存到「"+interpreted.category+"」长期偏好。",proposal:{category:interpreted.category,patch:interpreted.patch}});
+      const {excludedStaples:_currentOnly,...longTermPatch}=interpreted.patch;
+      if (interpreted.longTerm && Object.keys(longTermPatch).length) {
+        add(session,{role:"assistant",text:"可以把本句提到的改动保存到「"+interpreted.category+"」长期偏好。",proposal:{category:interpreted.category,patch:longTermPatch}});
       }
       return session;
     }
@@ -200,6 +201,7 @@ export async function applyAction(session:Session,models:Models,path:string,body
             session.selection.noSpice=undefined;
           }
           if (patch.staple) {
+            delete session.today.excludedStaples;
             session.selection.staple=patch.staple==="无主食"?"无":undefined;
             delete session.selection.preferredStaple;
           }

@@ -8,7 +8,7 @@ import type { PersonalModelId } from "@/lib/lunch-byok";
 import { LunchApiSettings } from "@/components/lunch-api-settings";
 import { isLegacyDailyPreview } from "@/lib/lunch-actions";
 import { toSpeechWav } from "@/lib/lunch-audio";
-import { activeCategory, categoryPreference, effective, recommendationFactMode, requestInterpretation, uuid } from "@/lib/lunch-engine";
+import { activeCategory, categoryPreference, effective, recommendationFactMode, requestInterpretation, stapleExclusionsLabel, uuid } from "@/lib/lunch-engine";
 import { timeoutSignal } from "@/lib/lunch-network";
 import { ask, connectionError, personalModels, transcribe, type Models } from "@/lib/lunch-models";
 
@@ -32,7 +32,7 @@ function PrefChips({value,category,staple,onClick}:{value:Pref;category:Category
     value.budget!==null?`¥${displayPrice(value.budget)} 内`:value.target!==null?`约 ¥${value.target}`:"预算不限",
     value.flavor==="不限"?"不限口味":`偏${value.flavor}`,
     ...(category==="主食"?(staple&&staple!=="无"?[staple]:staple==="无"?["不含主食"]:value.staple!=="不限"&&value.staple!=="不含米饭"?[value.staple]:[]):[]),
-    ...(value.staple==="不含米饭"?[value.staple]:[]),
+    ...(value.excludedStaples?.length?[stapleExclusionsLabel(value.excludedStaples)]:value.staple==="不含米饭"?[value.staple]:[]),
     ...(value.servings?[value.servings+" 人份"]:[]),
     ...(value.maxEta?[value.maxEta+" 分钟内"]:[]),
     ...(value.avoid.length?[`避开${value.avoid.join("、")}`]:[])

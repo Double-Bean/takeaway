@@ -1,6 +1,7 @@
 import type { Category, Dish, Flavor, Staple } from "./lunch-data";
 
-export type Pref = { budget:number|null; target:number|null; flavor:Flavor; staple:Staple; avoid:string[]; lowOil:boolean; noFry:boolean; servings?:number|null; maxEta?:number|null };
+export type MealStaple = Exclude<Dish["staple"],"无">;
+export type Pref = { budget:number|null; target:number|null; flavor:Flavor; staple:Staple; avoid:string[]; lowOil:boolean; noFry:boolean; servings?:number|null; maxEta?:number|null; excludedStaples?:MealStaple[] };
 export type Selection = {
   category?:Category; flavor?:Exclude<Flavor,"不限">; staple?:Dish["staple"]; preferredStaple?:Dish["staple"]; ingredient?:string; dishIds?:string[]; requestedDish?:string; method?:Dish["method"];
   shop?:string; excludedShops?:string[]; preferredDish?:string; unavailableDish?:string; orderBy?:"eta";
