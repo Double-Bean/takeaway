@@ -17,7 +17,9 @@ function noResult(session:Session) {
   const selection=session.selection??{};
   const category=activeCategory(session);
   const {budget,avoid,servings,maxEta}=effective(session);
+  if (selection.unavailableDish) return `菜单里没有「${selection.unavailableDish}」，暂无符合条件的菜品。想看看其他菜，可以直接告诉我。`;
   const labels=[
+    selection.shop,
     selection.noSpice?"不辣":selection.flavor,
     selection.ingredient?"含"+selection.ingredient:undefined,
     selection.method,
@@ -38,7 +40,7 @@ function noResult(session:Session) {
 }
 function mergeSelection(current:Selection, incoming:Selection) {
   if(incoming.category && incoming.category!==(current.category??"主食")) {
-    return {...incoming};
+    return {shop:current.shop,...incoming};
   }
   const selection={...current,...incoming};
   if ("staple" in incoming && !("preferredStaple" in incoming)) delete selection.preferredStaple;
@@ -121,21 +123,32 @@ export async function applyAction(session:Session,models:Models,path:string,body
       }
       remember(session,text);
       add(session,{role:"user",text});
-      const interpreted=await interpret(text,session,models,body.modelPatch);
+      const interpreted=await interpret(text,session,models,body.modelResult??(body.modelPatch===undefined?undefined:{patch:body.modelPatch}));
       if (interpreted.conflict) {
         add(session,{role:"assistant",text:`「${interpreted.conflict}」在你的忌口里。你可以在「我的偏好」调整这项设置。`});
         return session;
       }
-      if (interpreted.missingDish) {
+      if (interpreted.reply) {
+        add(session,{role:"assistant",text:interpreted.reply});
+        return session;
+      }
+      if (interpreted.alternatives && !session.selection?.unavailableDish && session.batch?.card &&
+          /^(?:再)?换(?:一?道(?:菜)?|一?个|个菜)(?:吧|呢|[。！])?$/.test(text) &&
+          !Object.keys(interpreted.patch).length) {
+        return applyAction(session,models,"recommendations/next",{batchId:session.batch.id,dishId:session.batch.card.dish.id});
+      }
+      if (interpreted.selection.unavailableDish) {
+        session.selection={
+          ...(interpreted.newRequest?{}:session.selection),
+          category:interpreted.category,
+          shop:interpreted.selection.shop??(interpreted.newRequest?undefined:session.selection?.shop),
+          unavailableDish:interpreted.selection.unavailableDish,
+          preferredDish:undefined,
+        };
+        if (interpreted.newRequest) session.today={};
         session.pending=null;
         session.comparison=null;
-        if(interpreted.newRequest) {
-          session.today={};
-          session.selection={category:interpreted.category};
-        }
-        session.batch={id:uuid(),query:text,card:null,seen:[]};
-        session.ranking={ids:[],matchCount:0};
-        add(session,{role:"assistant",text:`菜单里没有「${interpreted.missingDish}」，暂无符合条件的菜品。`});
+        await recommend(session,models,text,"",interpreted.mode);
         return session;
       }
       const pending=interpreted.newRequest?null:session.pending;
@@ -144,7 +157,7 @@ export async function applyAction(session:Session,models:Models,path:string,body
         interpreted.newRequest?{}:pending?.selection??session.selection??{},
         {...interpreted.selection,category:interpreted.category}
       );
-      if (interpreted.question) {
+      if (interpreted.question && !selection.unavailableDish) {
         if (interpreted.newRequest) {
           session.today={};
           session.selection={category:interpreted.category};
@@ -160,6 +173,7 @@ export async function applyAction(session:Session,models:Models,path:string,body
       session.selection=selection;
       session.today=attachAvoid(interpreted.newRequest?{}:session.today,patch,interpreted.restoreAvoid);
       session.comparison=null;
+      if(interpreted.alternatives) delete session.selection.preferredDish;
       const reference=session.orders.find(o=>o.id===interpreted.historical);
       await recommend(session,models,text,reference ? `查到${reference.sample?"样例订单":"历史订单"}里的${reference.dish.name}。我按相近口味另挑了一道。` : "按你刚才的要求，我找到了这份。",interpreted.mode);
       if (interpreted.longTerm && Object.keys(interpreted.patch).length) {

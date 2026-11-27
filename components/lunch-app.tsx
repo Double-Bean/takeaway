@@ -268,16 +268,15 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
     setBusy(true);
     setError("");
     try {
-      let modelPatch:unknown;
+      let modelResult:unknown;
       if(path==="messages"&&customConnection.current&&session&&typeof body.text==="string") {
         try {
-          const result=await requestInterpretation(body.text,session,customConnection.current);
-          modelPatch=result.patch??{};
+          modelResult=await requestInterpretation(body.text,session,customConnection.current);
         } catch(error) {
           setHint(connectionError(error)+" 本次按基础规则推荐。");
         }
       }
-      const payload={...body,modelPatch,usePersonalModel:Boolean(customConnection.current),requestId:uuid()};
+      const payload={...body,modelResult,usePersonalModel:Boolean(customConnection.current),requestId:uuid()};
       let data:Session;
       if (transport) data=await transport.act(path,payload);
       else {
@@ -476,7 +475,7 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
         {skipped&&<div className="feedback-strip"><span>为什么换一道？</span>
           <div>{feedbackReasons.map(reason=><button key={reason} disabled={busy} onClick={async()=>{if(await act("feedback",{...skipped,reason}))setSkipped(null);}}>{reason}</button>)}
           <button className="text-btn dismiss" disabled={busy} onClick={()=>setSkipped(null)}>跳过</button></div></div>}
-        {pendingUser&&<><div className="user-line"><p>{pendingUser}</p></div><div role="status" className="pending">正在找符合条件的午饭…</div></>}
+        {pendingUser&&<><div className="user-line"><p>{pendingUser}</p></div><div role="status" className="pending">午餐助手正在回复…</div></>}
       </div>}
     </main>
     <footer className="composer">
@@ -514,7 +513,7 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
           onDelete={id=>void act("quick-inputs",{id},false)}
           onReset={async()=>{if(await act("preferences/today",{reset:true}))setPanel(null);}}
           onSave={async(patch,hideQuick)=>{if(await act(`preferences/${panel}`,{patch,hideQuick,category:profileCategory,scope:profileCategory==="global"?"global":"category"})){if(panel==="today")setWelcome(false);setPanel(null);}}}/>
-        {panel==="profile"&&<div className="drawer-links"><button type="button" onClick={()=>setPanel("today")}><Clock3 size={17}/> 调整本轮条件 <ChevronRight size={17}/></button><button type="button" onClick={()=>setPanel("orders")}><History size={17}/> 历史订单 <ChevronRight size={17}/></button></div>}
+        {panel==="profile"&&<div className="drawer-links"><button type="button" onClick={()=>setPanel("orders")}><History size={17}/> 历史订单 <ChevronRight size={17}/></button></div>}
       </>}
       {panel==="api"&&<LunchApiSettings active={activeModel} onApply={setConnection}/>}
       {panel==="microphone"&&<>

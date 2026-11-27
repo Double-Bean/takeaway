@@ -59,6 +59,67 @@ try {
     await send(legacy,"再便宜点");
     assert.match(legacy.messages.at(-1).text,/多少元以内/);
   });
+  await check("指定餐厅可直接推荐，旧会话的澄清回复和后续调价都保留店名",async()=>{
+    const s=await freshen(seed(),local);
+    await send(s,"我想吃小满厨房的饭");
+    assert.equal(card(s).dish.shop,"小满厨房");
+    await send(s,"再便宜一点");
+    assert.equal(card(s).dish.shop,"小满厨房");
+    await send(s,"这家有甜点吗？");
+    assert.equal(card(s).dish.shop,"小满厨房");
+    assert.equal(card(s).dish.category,"甜点");
+
+    const legacy=await freshen(seed(),local);
+    legacy.messages=[
+      {role:"user",text:"我想吃小满厨房的",id:"user"},
+      {role:"assistant",text:"小满厨房是餐厅名称还是菜品风格？",id:"assistant"}
+    ];
+    legacy.pending={patch:{budget:25},question:legacy.messages[1].text};
+    await send(legacy,"餐厅名称");
+    assert.equal(card(legacy).dish.shop,"小满厨房");
+    assert(card(legacy).dish.price<=25);
+    assert.equal(legacy.pending,null);
+    await send(legacy,"小满厨房是餐厅名称");
+    assert.equal(card(legacy).dish.shop,"小满厨房");
+  });
+  await check("菜名缺失时不替用户换菜，明确同意后可继续推荐",async()=>{
+    const s=await send(await start(),"我想吃小满厨房的饭");
+    for (const request of ["我要吃佛跳墙","佛跳墙","有佛跳墙吗？"]) {
+      await send(s,request);
+      assert.equal(card(s),null);
+      assert.match(s.messages.at(-1).text,/没有「佛跳墙」.*暂无符合条件/);
+    }
+    await send(s,"看看别的菜");
+    assert(card(s));
+  });
+  await check("模型读取会话和菜品详情，可回答追问且不会捏造缺失菜品",async()=>{
+    const s=await send(await start(),"想吃小满厨房的饭，28元以内");
+    const previous=globalThis.fetch;
+    const initial=card(s).dish;
+    let calls=0;
+    globalThis.fetch=async (_url,options)=>{
+      const payload=JSON.parse(options.body);
+      const input=JSON.parse(payload.messages.at(-1).content);
+      calls++;
+      assert(input.history.some(turn=>turn.dish===initial.name));
+      assert.equal(input.conditions.budget,28);
+      assert.equal(input.dish.shop,"小满厨房");
+      const result=input.text==="这道适合带去公司吃吗？"
+        ? {reply:"可以放在午休时吃，模拟菜单标注为 1 人份。"}
+        : {dish:"桂花糯米藕"};
+      return Response.json({choices:[{message:{content:JSON.stringify(result)}}]});
+    };
+    try {
+      const model=personalModels("fixture","qwen-flash");
+      await applyAction(s,model,"messages",{text:"这道适合带去公司吃吗？"});
+      assert.match(s.messages.at(-1).text,/午休/);
+      assert.equal(card(s).dish,initial);
+      await applyAction(s,model,"messages",{text:"我要吃桂花糯米藕"});
+      assert.equal(card(s),null);
+      assert.match(s.messages.at(-1).text,/没有「桂花糯米藕」/);
+      assert.equal(calls,2);
+    } finally {globalThis.fetch=previous;}
+  });
   await check("30 元硬预算、清爽口味、米饭偏好",async()=>{
     const s=await send(await start(),"30 元以内，清爽一点，最好有米饭");
     assert.equal(effective(s).budget,30); assert.equal(effective(s).flavor,"清淡"); assert.equal(card(s).dish.staple,"米饭");
