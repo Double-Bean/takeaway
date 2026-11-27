@@ -16,7 +16,7 @@ function add(session:Session, message:Omit<Message,"id">) {
 function noResult(session:Session) {
   const selection=session.selection??{};
   const category=activeCategory(session);
-  const {budget,avoid,servings,maxEta}=effective(session);
+  const {budget,avoid,servings,maxEta,staple}=effective(session);
   if (selection.unavailableDish) return `菜单里没有「${selection.unavailableDish}」，暂无符合条件的菜品。想看看其他菜，可以直接告诉我。`;
   const labels=[
     selection.shop,
@@ -25,6 +25,7 @@ function noResult(session:Session) {
     selection.ingredient?"含"+selection.ingredient:undefined,
     selection.method,
     selection.staple==="无"?"不含主食":selection.staple?"含"+selection.staple:undefined,
+    staple==="不含米饭"?staple:undefined,
     selection.lowOil?"少油":undefined,
     selection.noFry?"非油炸":undefined,
     selection.meatless?"不含肉类":undefined,

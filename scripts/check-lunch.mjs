@@ -360,6 +360,35 @@ try {
     await send(s,"还是想吃辣的");
     assert.equal(card(s).dish.flavor,"香辣");
   });
+  await check("拒绝米饭后首推、换菜和榜单都排除配饭",async()=>{
+    for (const phrase of ["我不想吃米饭", "不要米饭", "不吃米饭", "不要配饭", "别给我配饭"]) {
+      const s=await send(await start(),"必须有米饭，30元以内，不要香菜");
+      assert.equal(card(s).dish.staple,"米饭");
+      const previous=args(s);
+      await applyAction(s,local,"messages",{text:phrase,modelPatch:{staple:"优先米饭"}});
+      assert.equal(effective(s).staple,"不含米饭",phrase);
+      assert.equal(effective(s).budget,30,phrase);
+      assert(effective(s).avoid.includes("香菜"),phrase);
+      assert.notEqual(card(s).dish.staple,"米饭",phrase);
+      assert.equal(card(s).conditions.staple,"不含米饭",phrase);
+      assert(s.ranking.ids.every(id=>menu.find(dish=>dish.id===id).staple!=="米饭"),phrase);
+      await assert.rejects(()=>applyAction(s,local,"orders",previous),{status:409});
+      await applyAction(s,local,"recommendations/next",args(s));
+      assert.notEqual(card(s).dish.staple,"米饭",phrase);
+      await send(s,"预算改成25元以内");
+      assert.equal(effective(s).staple,"不含米饭");
+      assert.notEqual(card(s).dish.staple,"米饭",phrase);
+      await send(s,"改主意了，还是要米饭");
+      assert.equal(card(s).dish.staple,"米饭",phrase);
+    }
+    const s=await send(await freshen(seed(),local),"不想吃米饭，最好是面条");
+    assert.equal(card(s).conditions.staple,"不含米饭");
+    await send(s,"米饭也可以");
+    assert.equal(effective(s).staple,"不限");
+    await send(s,"不吃米饭，1元以内");
+    assert.equal(card(s),null);
+    assert.match(s.messages.at(-1).text,/不含米饭/);
+  });
   await check("改主意可重设口味、主食和预算，保留无关条件",async()=>{
     const s=await send(await freshen(seed(),local),"想吃辣的面条，30元以内，不要香菜");
     assert.equal(card(s).dish.staple,"面");
