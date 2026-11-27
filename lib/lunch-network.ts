@@ -1,3 +1,5 @@
+export const studioApiOrigin="https://jincy0610-takeaway.ms.show";
+
 export function timeoutSignal(milliseconds:number) {
   if (typeof AbortSignal.timeout==="function") return AbortSignal.timeout(milliseconds);
   const controller=new AbortController();

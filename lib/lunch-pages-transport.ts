@@ -1,7 +1,7 @@
 import { applyAction, freshen } from "./lunch-actions";
 import { seed } from "./lunch-engine";
 import { models } from "./lunch-models";
-import { timeoutSignal } from "./lunch-network";
+import { studioApiOrigin, timeoutSignal } from "./lunch-network";
 import type { Session } from "./lunch-types";
 
 const storageKey="takeaway-lunch-session-v2";
@@ -34,6 +34,8 @@ async function sessionResponse(response:Response) {
 
 export function createPagesTransport(backend:string|undefined,fetcher:typeof fetch=fetch,storage=()=>localStorage) {
   const sameOrigin=backend?.startsWith("/")&&!backend.startsWith("//");
+  const bodySession=backend===studioApiOrigin+"/api/";
+  const sessionKey=bodySession?remoteKey+"-modelscope":remoteKey;
   const localModel=models({});
   let token:string|null=null;
   let usingBackend=false;
@@ -61,19 +63,24 @@ export function createPagesTransport(backend:string|undefined,fetcher:typeof fet
 
   function remote(path:string,options:RequestInit={}) {
     const headers=new Headers(options.headers);
-    if (token) headers.set(sessionHeader,token);
+    if (token&&!bodySession) headers.set(sessionHeader,token);
     return fetcher(backend+path+"?daily=manual",{...options,headers,credentials:sameOrigin?"same-origin":"omit"});
   }
 
+  function jsonBody(body:Record<string,unknown>) {
+    return {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)};
+  }
+
   async function connect() {
-    if(!sameOrigin) token=token??readStorage(remoteKey);
-    const response=await remote("session",{signal:timeoutSignal(12000)});
+    if(!sameOrigin) token=token??readStorage(sessionKey);
+    const resume=bodySession&&token?jsonBody({sessionId:token}):{};
+    const response=await remote("session",{...resume,signal:timeoutSignal(12000)});
     const data=await sessionResponse(response);
     if(!sameOrigin) {
       const id=response.headers.get(sessionHeader);
       if (!id) throw new CloudError("云端会话尚未建立。",502);
       token=id;
-      writeStorage(remoteKey,id);
+      writeStorage(sessionKey,id);
     }
     usingBackend=true;
     return data;
@@ -94,10 +101,10 @@ export function createPagesTransport(backend:string|undefined,fetcher:typeof fet
         try {await connect();} catch { /* Continue in the existing local session. */ }
       }
       if (usingBackend) {
-        const encoded=JSON.stringify(body);
+        const request=jsonBody(bodySession?{...body,sessionId:token}:body);
         try {
           return await retry(async()=>sessionResponse(await remote(path,{
-            method:"POST",headers:{"Content-Type":"application/json"},body:encoded,
+            ...request,
             signal:timeoutSignal(30000),
           })));
         } catch(error) {
@@ -112,6 +119,7 @@ export function createPagesTransport(backend:string|undefined,fetcher:typeof fet
       return localSession;
     },
     transcribe(audio:FormData,signal:AbortSignal) {
+      if (bodySession&&token) audio.set("sessionId",token);
       return remote("transcriptions",{method:"POST",body:audio,signal});
     },
   };

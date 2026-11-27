@@ -8,7 +8,7 @@ import { join } from "node:path";
 const target = mkdtempSync(join(tmpdir(), "lunch-check-"));
 try {
   execFileSync("./node_modules/.bin/tsc", [
-    "lib/lunch-actions.ts", "lib/lunch-pages-transport.ts", "--outDir", target, "--target", "es2023", "--module", "commonjs", "--types", "node", "--strict", "--skipLibCheck"
+    "lib/lunch-actions.ts", "lib/lunch-pages-transport.ts", "lib/lunch-http.ts", "--outDir", target, "--target", "es2023", "--module", "commonjs", "--types", "node", "--strict", "--skipLibCheck"
   ], {stdio:"inherit"});
   const require = createRequire(import.meta.url);
   const { categories, foods, menu } = require(join(target,"lunch-data.js"));
@@ -63,6 +63,16 @@ try {
     const s=await send(await start(),"30 元以内，清爽一点，最好有米饭");
     assert.equal(effective(s).budget,30); assert.equal(effective(s).flavor,"清淡"); assert.equal(card(s).dish.staple,"米饭");
     assert(card(s).dish.price<=30 && card(s).dish.flavor==="清淡");
+  });
+  await check("口味程度词不被当成菜名，显式菜名仍然可识别",async()=>{
+    for (const text of ["清淡一点","想吃清淡一点","想吃清淡一点的","想吃清淡些的","想吃清淡一点的米饭"]) {
+      const s=await send(await start(),text);
+      assert.equal(s.selection.requestedDish,undefined,text);
+      assert.equal(card(s).dish.flavor,"清淡",text);
+    }
+    const named=await send(await start(),"想吃清淡一点的清蒸鲈鱼配饭");
+    assert.equal(named.selection.requestedDish,undefined);
+    assert.equal(card(named).dish.name,"清蒸鲈鱼配饭");
   });
   await check("连续追问保留条件并以当前餐价格为参照",async()=>{
     const s=await send(await start(),"30 元以内，清爽一点，最好有米饭");
@@ -332,21 +342,26 @@ try {
     assert.match(s.messages.at(-1).text,/提高一点预算/);
     assert.equal(effective(s).budget,5);
   });
-  await check("指定菜名、油炸方式和无匹配都严格过滤",async()=>{
+  await check("菜名只调整排序，缺菜与硬约束仍准确",async()=>{
     const s=await start();
     await send(s,"想吃炸猪排饭");
     assert.equal(card(s).dish.name,"日式炸猪排饭");
-    assert.deepEqual(s.ranking.ids,[card(s).dish.id]);
+    assert(s.ranking.ids.length>1);
     await send(s,"想吃牛肉汉堡");
     assert.equal(card(s),null);
-    assert.match(s.messages.at(-1).text,/暂无推荐的菜品.*牛肉汉堡/);
+    assert.match(s.messages.at(-1).text,/牛肉汉堡.*暂无符合条件/);
     assert.deepEqual(s.ranking.ids,[]);
+    await send(s,"清淡一点");
+    assert.equal(card(s).dish.flavor,"清淡");
+    await send(s,"想吃牛肉面");
+    assert(card(s).dish.ingredients.includes("牛肉"));
+    assert.equal(card(s).dish.staple,"面");
     await send(s,"想吃点油炸小吃");
     assert.equal(card(s).dish.method,"油炸");
     assert.equal(card(s).dish.category,"零食");
     await send(s,"想吃炸虾天妇罗，不吃虾");
-    assert.equal(card(s),null);
-    assert.deepEqual(s.ranking.ids,[]);
+    assert(!card(s).dish.ingredients.includes("虾"));
+    assert.notEqual(card(s).dish.name,"炸虾天妇罗");
   });
   await check("旧版按品类存放的忌口合并并跨类别生效",async()=>{
     const s=await start();
@@ -489,6 +504,51 @@ try {
     assert.equal(sessionRequests,3);
     assert.equal(writeRequests,2);
     assert.equal(bodies[0],bodies[1]);
+  });
+  await check("GitHub Pages 与魔搭共用后端，跨域会话可恢复，推荐结果一致",async()=>{
+    const {createLunchHttp}=require(join(target,"lunch-http.js"));
+    const {studioApiOrigin}=require(join(target,"lunch-network.js"));
+    const rows=new Map();
+    const handle=createLunchHttp({},{
+      spend:async()=>true,
+      load:async id=>rows.get(id)??null,
+      save:async(id,row,state)=>{rows.set(id,{state:JSON.stringify(state),revision:(row?.revision??-1)+1});return true;},
+    });
+    const storage=new Map();
+    const browserStorage=()=>({getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)});
+    const pagesFetch=async(url,options)=>{
+      assert.equal(options.credentials,"omit");
+      assert.equal(options.headers.has("X-Lunch-Session"),false);
+      const headers=new Headers(options.headers);
+      headers.set("Origin","https://double-bean.github.io");
+      return handle(new Request(url,{...options,headers}),new URL(url).pathname.slice(5));
+    };
+    const pagesTransport=()=>createPagesTransport(studioApiOrigin+"/api/",pagesFetch,browserStorage);
+    const initial=await pagesTransport().load();
+    assert.deepEqual(initial.messages,[]);
+    const payload={requestId:crypto.randomUUID(),text:"想吃清淡一点的"};
+    const resumed=pagesTransport();
+    assert.deepEqual((await resumed.load()).messages,[]);
+    assert.equal(rows.size,1);
+    const pages=await resumed.act("messages",payload);
+    const native=await handle(new Request(studioApiOrigin+"/api/session"),"session");
+    const cookie=native.headers.get("set-cookie").split(";")[0];
+    const direct=await handle(new Request(studioApiOrigin+"/api/messages",{
+      method:"POST",headers:{cookie,"Content-Type":"application/json",Origin:studioApiOrigin},body:JSON.stringify(payload),
+    }),"messages");
+    assert.equal(direct.status,200);
+    const theSame=await direct.json();
+    assert.deepEqual(pages.selection,theSame.selection);
+    assert.equal(card(pages).dish.id,card(theSame).dish.id);
+    const audio=new FormData();
+    audio.set("audio",new Blob([new Uint8Array(256)],{type:"audio/wav"}),"sample.wav");
+    const speech=await resumed.transcribe(audio,new AbortController().signal);
+    assert.equal(speech.status,503);
+    assert.match((await speech.json()).error,/尚未启用/);
+    const foreign=await handle(new Request(studioApiOrigin+"/api/messages",{
+      method:"POST",headers:{Origin:"https://example.com"},body:JSON.stringify(payload),
+    }),"messages");
+    assert.equal(foreign.status,403);
   });
   await check("开场无消息即有十道排名，筛选后匹配菜优先且数量固定",async()=>{
     const s=await freshen(seed(),local);

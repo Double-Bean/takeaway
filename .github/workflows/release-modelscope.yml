@@ -3,7 +3,7 @@ name: Release ModelScope runtime
 on:
   push:
     branches: [deploy/modelscope]
-    paths: [studio/**, Dockerfile]
+    paths: [studio/**, Dockerfile, app/globals.css, lib/**, components/**, pages-site/**, public/**, vite.pages.config.ts, scripts/build-studio.mjs]
 
 permissions:
   contents: read

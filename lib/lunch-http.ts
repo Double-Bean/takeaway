@@ -17,10 +17,10 @@ export type SessionStore={
   save(id:string,row:SessionRow|null,state:Session):Promise<boolean>;
 };
 
-function visitor(request:Request) {
+function visitor(request:Request,sessionId?:unknown) {
   if (fromPages(request)) {
-    const token=request.headers.get(sessionHeader);
-    return token&&idPattern.test(token) ? {id:token,created:false} : {id:uuid(),created:true};
+    const token=request.headers.get(sessionHeader)??sessionId;
+    return typeof token==="string"&&idPattern.test(token) ? {id:token,created:false} : {id:uuid(),created:true};
   }
   const known=request.headers.get("cookie")?.match(new RegExp(`(?:^|;\\s*)${cookieName}=([^;]+)`))?.[1];
   return known&&idPattern.test(known) ? {id:known,created:false} : {id:uuid(),created:true};
@@ -68,10 +68,10 @@ export function createLunchHttp(settings:Parameters<typeof models>[0],store:Sess
     return json({error:"请求方式不支持。"},405);
   };
 
-  async function get(request:Request,path:string) {
+  async function get(request:Request,path:string,sessionId?:unknown) {
     try {
       if(!["session","orders"].includes(path)) throw new ActionError("找不到此功能。",404);
-      let identity=visitor(request);
+      let identity=visitor(request,sessionId);
       const row=await load(identity.id);
       if (fromPages(request)&&!row&&!identity.created) identity={id:uuid(),created:true};
       const model=models(settings);
@@ -91,15 +91,15 @@ export function createLunchHttp(settings:Parameters<typeof models>[0],store:Sess
     try {
       if (!fromPages(request) && (request.headers.get("sec-fetch-site")==="cross-site"
         || (request.headers.has("Origin") && request.headers.get("Origin")!==new URL(request.url).origin))) throw new ActionError("请从午餐助手页面发起操作。",403);
-      const identity=visitor(request);
-      if(identity.created) throw new ActionError("会话已过期，请刷新后重试。",409);
       const model=models(settings);
       if(path==="transcriptions") {
-        if (!await load(identity.id)) throw new ActionError("会话已过期，请刷新后重试。",409);
         if(!model.speechKey) throw new ActionError("云端语音尚未启用，请使用文字输入。",503);
         const length=Number(request.headers.get("content-length")??0);
         if(length>3_200_000) throw new ActionError("录音过大，请缩短后重试。",413);
-        const file=(await request.formData()).get("audio");
+        const form=await request.formData();
+        const identity=visitor(request,form.get("sessionId"));
+        if(identity.created||!await load(identity.id)) throw new ActionError("会话已过期，请刷新后重试。",409);
+        const file=form.get("audio");
         if(!(file instanceof File)||file.size<128||file.size>3_000_000||! /^(audio|video)\/(webm|mp4|mpeg|wav|ogg|x-m4a)(;|$)/i.test(file.type)) throw new ActionError("录音为空或格式不支持，请重新录制。");
         await budgetFor(identity.id,"speech");
         let text:string;
@@ -117,7 +117,11 @@ export function createLunchHttp(settings:Parameters<typeof models>[0],store:Sess
       }
       if(Number(request.headers.get("content-length")??0)>12_000) throw new ActionError("请求内容过长。",413);
       const body=await request.json() as Record<string,unknown>;
-      if(!body || typeof body!=="object"||typeof body.requestId!=="string"||!idPattern.test(body.requestId)) throw new ActionError("请求格式不正确。");
+      if(!body || typeof body!=="object" || Array.isArray(body)) throw new ActionError("请求格式不正确。");
+      if(path==="session"&&fromPages(request)) return get(request,path,body.sessionId);
+      const identity=visitor(request,body.sessionId);
+      if(identity.created) throw new ActionError("会话已过期，请刷新后重试。",409);
+      if(typeof body.requestId!=="string"||!idPattern.test(body.requestId)) throw new ActionError("请求格式不正确。");
       let actionModel=body.usePersonalModel===true?models({}):model;
       let charged=false;
       for(let attempt=0;attempt<3;attempt++) {

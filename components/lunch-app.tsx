@@ -69,14 +69,12 @@ function Preferences({value,hideQuick,scope,category,quick,onSave,onReset,onDele
       <label>预算上限（元）<input type="number" min="1" max="300" step="0.01" placeholder="不限" value={draft.budget??""} onChange={e=>setDraft(old=>({...old,budget:e.target.value?Number(e.target.value):null,target:null}))}/></label>
       <label>口味<select value={draft.flavor} onChange={e=>update("flavor",e.target.value as Pref["flavor"])}>{["不限",...flavors].map(x=><option key={x}>{x}</option>)}</select></label>
       {category==="主食"&&<label>主食<select value={draft.staple} onChange={e=>update("staple",e.target.value as Pref["staple"])}>{staples.map(x=><option key={x}>{x}</option>)}</select></label>}
-      {scope==="current"&&<>
-        <label>人数<select value={draft.servings??""} onChange={e=>update("servings",e.target.value?Number(e.target.value):null)}>
+        <label>用餐人数<select value={draft.servings??""} onChange={e=>update("servings",e.target.value?Number(e.target.value):null)}>
           <option value="">不限</option>{[1,2,3,4].map(n=><option key={n} value={n}>{n} 人份</option>)}
         </select></label>
         <label>送达时间<select value={draft.maxEta??""} onChange={e=>update("maxEta",e.target.value?Number(e.target.value):null)}>
           <option value="">不限</option>{[...new Set([25,30,35,40,45,...(draft.maxEta?[draft.maxEta]:[])])].sort((a,b)=>a-b).map(n=><option key={n} value={n}>{n} 分钟内</option>)}
         </select></label>
-      </>}
     </div>
     <div className="checks">
       <label><input type="checkbox" checked={draft.lowOil} onChange={e=>update("lowOil",e.target.checked)}/>优先少油</label>
@@ -160,7 +158,7 @@ const suggestions=[
   {label:"参考上一餐",text:"想吃像上次那种，帮我换一道",icon:History,tone:"blue"},
 ];
 
-const names:Record<Panel,string>={api:"API 设置",profile:"长期偏好",today:"本轮条件",orders:"午饭订单",evidence:"为什么推荐这道",compare:"本轮排序",confirm:"确认模拟下单",microphone:"用语音说说今天想吃什么",menu:"查看模拟菜单"};
+const names:Record<Panel,string>={api:"API 设置",profile:"我的偏好",today:"本轮条件",orders:"午饭订单",evidence:"为什么推荐这道",compare:"本轮排序",confirm:"确认模拟下单",microphone:"用语音说说今天想吃什么",menu:"查看模拟菜单"};
 export type LunchTransport = {
   load():Promise<Session>;
   act(path:string, body:Record<string,unknown>):Promise<Session>;
@@ -449,7 +447,6 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
         <div className="welcome-links">
           <button className="browse-menu" type="button" onClick={()=>setPanel("menu")}><MenuIcon size={16}/> 浏览菜单</button>
           <button className="browse-menu" type="button" disabled={!session} onClick={()=>setPanel("compare")}>排序</button>
-          <button className="browse-menu" type="button" disabled={!session} onClick={()=>setPanel("today")}>筛选</button>
         </div>
         {!session&&error&&<p className="welcome-error" role="alert">{error}</p>}
       </section>:<div className="conversation">
@@ -517,7 +514,7 @@ export default function LunchApp({transport}:{transport?:LunchTransport}) {
           onDelete={id=>void act("quick-inputs",{id},false)}
           onReset={async()=>{if(await act("preferences/today",{reset:true}))setPanel(null);}}
           onSave={async(patch,hideQuick)=>{if(await act(`preferences/${panel}`,{patch,hideQuick,category:profileCategory,scope:profileCategory==="global"?"global":"category"})){if(panel==="today")setWelcome(false);setPanel(null);}}}/>
-        {panel==="profile"&&<div className="drawer-links"><button onClick={()=>setPanel("orders")}><History size={17}/> 历史订单 <ChevronRight size={17}/></button></div>}
+        {panel==="profile"&&<div className="drawer-links"><button type="button" onClick={()=>setPanel("today")}><Clock3 size={17}/> 调整本轮条件 <ChevronRight size={17}/></button><button type="button" onClick={()=>setPanel("orders")}><History size={17}/> 历史订单 <ChevronRight size={17}/></button></div>}
       </>}
       {panel==="api"&&<LunchApiSettings active={activeModel} onApply={setConnection}/>}
       {panel==="microphone"&&<>

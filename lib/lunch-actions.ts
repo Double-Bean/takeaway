@@ -19,7 +19,7 @@ function noResult(session:Session) {
   const {budget,avoid,servings,maxEta}=effective(session);
   const labels=[
     selection.noSpice?"不辣":selection.flavor,
-    selection.requestedDish?"想吃"+selection.requestedDish:selection.ingredient?"含"+selection.ingredient:undefined,
+    selection.ingredient?"含"+selection.ingredient:undefined,
     selection.method,
     selection.staple==="无"?"不含主食":selection.staple?"含"+selection.staple:undefined,
     selection.lowOil?"少油":undefined,
@@ -32,8 +32,7 @@ function noResult(session:Session) {
   ].filter(Boolean);
   const budgetIsLimiting=budget!==null&&menu.some(dish=>eligible({...session,today:{...session.today,budget:null}},dish));
   const conditions=labels.length?"（"+labels.join("、")+"）":"";
-  if (selection.dishIds?.length===0) return `暂无推荐的菜品。菜单里没有「${selection.requestedDish}」。`;
-  const message=selection.requestedDish?"暂无推荐的菜品":"模拟菜单里暂无符合条件的"+category;
+  const message="模拟菜单里暂无符合条件的"+category;
   return message+conditions+"。"
     +(budgetIsLimiting?"可以提高一点预算，我会继续保留忌口。":"可以调整一个条件，我会继续保留忌口。");
 }
@@ -92,6 +91,12 @@ export async function freshen(session:Session,models:Models) {
     session.preferencesVersion=3;
     delete session.ranking;
   }
+  for(const selection of [session.selection,session.pending?.selection]) {
+    if(!selection || !("dishIds" in selection || "requestedDish" in selection)) continue;
+    delete session.ranking;
+    delete selection.dishIds;
+    delete selection.requestedDish;
+  }
   session.mode=models.provider;
   if (isLegacyDailyPreview(session)) {
     session.messages=[];
@@ -121,13 +126,25 @@ export async function applyAction(session:Session,models:Models,path:string,body
         add(session,{role:"assistant",text:`「${interpreted.conflict}」在你的忌口里。你可以在「我的偏好」调整这项设置。`});
         return session;
       }
+      if (interpreted.missingDish) {
+        session.pending=null;
+        session.comparison=null;
+        if(interpreted.newRequest) {
+          session.today={};
+          session.selection={category:interpreted.category};
+        }
+        session.batch={id:uuid(),query:text,card:null,seen:[]};
+        session.ranking={ids:[],matchCount:0};
+        add(session,{role:"assistant",text:`菜单里没有「${interpreted.missingDish}」，暂无符合条件的菜品。`});
+        return session;
+      }
       const pending=interpreted.newRequest?null:session.pending;
       const patch=attachAvoid(pending?.patch??{},interpreted.patch,interpreted.restoreAvoid);
       const selection=mergeSelection(
         interpreted.newRequest?{}:pending?.selection??session.selection??{},
         {...interpreted.selection,category:interpreted.category}
       );
-      if (interpreted.question && selection.dishIds?.length!==0) {
+      if (interpreted.question) {
         if (interpreted.newRequest) {
           session.today={};
           session.selection={category:interpreted.category};

@@ -28,15 +28,11 @@ npm start
 
 ## GitHub Pages
 
-部署好上面的 Cloudflare Worker 后，在仓库根目录执行：
+从同一个 `deploy/modelscope` 源码提交构建两个入口。先部署魔搭并验证推荐和语音，再执行 `npm run build:pages`。将 `dist/pages` 发布到 `gh-pages` 分支根目录，并保留 `.nojekyll`。
 
-```sh
-VITE_LUNCH_API_ORIGIN=https://takeaway.<你的子域>.workers.dev npm run build:pages
-```
+默认构建时 GitHub Pages 和魔搭页面共用 `https://jincy0610-takeaway.ms.show/api/`。两边的菜单、意图解析和模型服务随同一次魔搭部署更新，浏览器会话按入口独立保存。模型不可用时，页面仍可使用各自的本地规则模式。
 
-将地址替换为实际 Worker 的 HTTPS 域名，也可以使用 Worker 绑定的自定义域名。将 `dist/pages` 的产物发布到 `gh-pages` 分支根目录，并保留 `.nojekyll`。GitHub Pages 访客无需登录，浏览器会直接向 Worker 请求 `/api`。Worker 允许 `https://double-bean.github.io` 跨域访问，以会话头维护访客身份。
-
-未设置 Worker 地址或首次连接失败时，页面使用本地规则和浏览器内的演示会话；云端文字模型与录音转写需要可达的 Worker 和服务端百炼密钥。切换线上地址前，分别从中国大陆网络测试页面加载、文字推荐和录音转写。
+若需用 Cloudflare Worker 单独测试，可用 `VITE_LUNCH_API_ORIGIN` 指定它的 HTTPS 源地址。
 
 ## 魔搭创空间部署
 
